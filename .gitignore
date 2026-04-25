@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+.venv/
+
+# Test / coverage
+.coverage
+.pytest_cache/
+.coverage.*
+
+# Type checking / linting
+.mypy_cache/
+.ruff_cache/
+
+# Node (for .opencode plugins)
+.opencode/node_modules/
+.opencode/bun.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data (runtime generated, may contain secrets)
+data/sessions/*.json
