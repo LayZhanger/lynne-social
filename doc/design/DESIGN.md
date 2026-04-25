@@ -323,20 +323,19 @@ Step 2:
 ### W5. Scheduler（wheel）
 
 ```
-职责：管理定时任务，周期性调用 Agent.run()。
+职责：通用定时回调调度器。管理定时任务，按 schedule 触发 callback。不对 Agent 有任何导入。
 
 接口：
-  class Scheduler:
-      __init__(agent_factory: Factory[Agent])
-
-      add_job(task: TaskConfig) -> None
-      remove_job(task_name: str) -> None
+  class Scheduler(Module):
+      add_job(name: str, schedule: str, callback: Callable, *args, **kwargs) -> None
+      remove_job(name: str) -> None
       start() -> None
       stop() -> None
       get_jobs() -> list[JobStatus]
-      sync_from_config() -> None
+      sync_from_config(tasks: list[TaskConfig], callback: Callable) -> None
 
-v4.0 变化：Scheduler 调用 Agent 而非 Orchestrator。
+v4.0 变化：Scheduler 是纯通用调度器。Agent 的绑定在 main.py 完成：
+  scheduler.add_job("AI日报", "every 4 hours", agent.run, intent="AI动态", platforms=[...])
 ```
 
 ### W6. Logger（wheel）
@@ -442,27 +441,20 @@ Agent                           LLMEngine       Tool(search)      Tool(storage)
         │                     │                     │
         ▼                     ▼                     ▼
   ┌──────────┐        ┌──────────┐          ┌──────────┐
-  │Scheduler │        │ API Layer│          │  Agent   │     ← core
-  └────┬─────┘        └────┬─────┘          └──┬───┬───┘
-       │                   │                   │   │
-       └───────────────────┼───────────────────┘   │
-                           │                       │
-                           ▼                       ▼
-                        ┌──────────────────────────────────┐
-                        │            wheel                 │
-                        │                                  │
-                        │  LLMEngine    BrowserManager     │
-                        │  FileStorage  Logger             │
-                        └──────────────────────────────────┘
-                                                  │
-                                                  ▼
-                                          ┌──────────────┐
-                                          │ Platform     │     ← core
-                                          │ Adapters     │
-                                          └──────────────┘
+  │ API Layer│        │  Agent   │          │ Platform │     ← core
+  └────┬─────┘        └──┬───┬───┘          │ Adapters │
+       │                 │   │              └──────────┘
+       │                 │   │
+       ▼                 ▼   ▼
+┌──────────────────────────────────────────────┐
+│                   wheel                      │
+│                                              │
+│  LLMEngine    BrowserManager    Scheduler    │
+│  FileStorage  Logger             Config      │
+└──────────────────────────────────────────────┘
 ```
 
-**依赖方向**：`Scheduler → Agent → wheel`，`API → Agent`，`Adapter → BrowserManager (wheel)`。单向，不可逆。
+**依赖方向**：`core → wheel`（单向，不可逆）。`Agent → wheel`（调 LLMEngine/Storage/Adapter），`API → Agent`（封装 HTTP 请求），`Scheduler` 是通用定时回调器，不含 Agent import，绑定在 `main.py` 完成。
 
 ---
 
@@ -473,7 +465,7 @@ Agent                           LLMEngine       Tool(search)      Tool(storage)
 | 1 | **LLMEngine 实现** | `src/wheel/llm/imp/openai_compat.py`，`chat()` |
 | 2 | **Agent 实现** | `src/core/agent/imp/react_agent.py`，ReAct 循环 |
 | 3 | **Tool 具体实现** | SearchTool / StorageTool / ReportTool |
-| 4 | **Scheduler 对接 Agent** | Scheduler 调用 `Agent.run()` |
+| 4 | **Scheduler 实现** | `src/wheel/scheduler/imp/apscheduler_impl.py`，通用定时回调器 |
 | 5 | **API Layer 对接 Agent** | `POST /api/run` → `Agent.run()` |
 
 ---
