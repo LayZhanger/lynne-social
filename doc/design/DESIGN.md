@@ -1,6 +1,6 @@
-# Lynne 总体设计方案 v4.0
+# Lynne 总体设计方案 v4.1
 
-> **v4.0 核心变更**：LLM 从"处理工具"提升为"决策中枢"（Agent 模式），Orchestrator 删除，LLMEngine 与 BrowserManager 移入 wheel 层。
+> **v4.1 核心变更**：LLM 从"处理工具"提升为"决策中枢"（Agent 模式），Orchestrator 删除。Adapter 提取策略从硬编码 CSS 改为 LLM 驱动（DOM 骨架 → 生成 JS extractPosts），CSS 作为 fallback。
 
 ---
 
@@ -218,9 +218,9 @@ Step 2:
 ### M4. PlatformAdapter
 
 ```
-职责：平台特定的数据采集。不变。
+职责：平台数据采集。v4.1 起不再硬编码 CSS 选择器，改为 LLM 驱动的自适应提取。
 
-抽象基类：
+抽象基类（接口不变）：
   class BaseAdapter(ABC):
       platform_name: str
 
@@ -230,9 +230,80 @@ Step 2:
       def extract(data: dict) -> UnifiedItem: ...
       async def health_check() -> bool: ...
 
-已实现：RedNoteAdapter（DOM 选择器 + 滚动加载）
+提取策略（v4.1 新增）：
+  Adapter 不写死 CSS 选择器。分两条路径：
+
+  ┌─ LLM 路径（推荐）─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐
+  │  page 加载                                                      │
+  │    → 通用 DOM walker 提取前 N 个帖子的结构骨架（tag + cls + txt） │
+  │    → LLM 分析骨架，生成 JS 提取函数                               │
+  │    → page.evaluate(函数) 批量提取全部帖子                         │
+  │    → 缓存（按 URL host + path），后续翻页/同页面零 LLM 调用       │
+  └─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+
+  ┌─ CSS 回退路径（无 LLM 或 LLM 生成失败时）─ ─ ─ ─ ─ ┐
+  │  硬编码 CSS 选择器（当前 _NOTE_ITEM 等），行为不变          │
+  └─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+
+依赖变化：
+  Adapter 可选依赖 LLMEngine（llm_engine=None 时走 CSS 路径）。
+
+  依赖关系：Adapter → BrowserManager + [LLMEngine]  (core → wheel，单向)
+
+已实现：RedNoteAdapter（CSS 路径 + 骨架提取 JS 已就绪，LLM 路径待 LLMEngine 完成后接入）
 待实现：TwitterAdapter（GraphQL API 拦截）
 ```
+
+#### M4a. 提取协议
+
+```
+三层数据格式：
+
+[1] 输入：页面骨架 (page.evaluate → dict)
+   通用 DOM walker（不依赖平台选择器）遍历 DOM，找包含子文本、链接、图片的容器节点。
+   只取前 3 个帖子的结构样本（~500 tokens），发送给 LLM。
+
+   格式：[
+     {"tag":"section", "cls":"note-item", "nth":1,
+      "children":[
+        {"sel":"div.title>span",        "txt":"GPT-5 发布"},
+        {"sel":"div.author span.name",  "txt":"科技观察者"},
+        {"sel":"div.desc",              "txt":"本文分析..."},
+        {"sel":"span.count",            "txt":"12,000"},
+        {"sel":"a[href*='/explore/']",  "href":"/explore/123"},
+        {"sel":"img",                   "src":"https://pic.jpg"}
+      ]},
+     ...
+   ]
+
+   提示词（send to LLM）：
+     "你是浏览器自动化专家。根据以下页面骨架生成 JavaScript 函数 extractPosts()。
+      函数遍历 DOM，提取每个帖子的字段：item_id, title, author_name, content,
+      likes, url, images。
+      字段名必须是英文 camelCase，值必须是字符串或数组。
+      返回纯 JavaScript 代码，不含 ``` 标记，不含注释。"
+
+[2] 输出：JS 提取函数 (LLM → Adapter)
+   形如：
+     function extractPosts() {
+       return [...document.querySelectorAll('.note-item')].map(el => ({
+         item_id: el.getAttribute('data-id') || '',
+         title: el.querySelector('.title span')?.textContent?.trim() || '',
+         author_name: el.querySelector('.author .name')?.textContent?.trim() || '',
+         content: el.querySelector('.desc')?.textContent?.trim() || '',
+         likes: (el.querySelector('.count')?.textContent||'0').replace(/,/g,''),
+         url: (()=>{const a=el.querySelector('a');const h=a?.getAttribute('href')||'';
+           return h.startsWith('http')?h:'https://www.xiaohongshu.com'+h;})(),
+         images: [...el.querySelectorAll('img')].map(i=>i.getAttribute('src')||'').filter(Boolean)
+       }));
+     }
+
+[3] 输出：UnifiedItem (page.evaluate(extractPosts) → dict → extract() → UnifiedItem)
+   extractPost 的返回值直接映射到现有的 extract(data: dict) → UnifiedItem 方法。
+   字段名兼容现有 fallback 逻辑（item_id/id, author_name/username 等）。
+```
+
+
 
 ### W1. BrowserManager（wheel）
 
@@ -290,7 +361,8 @@ Step 2:
   - 删除 Jinja2 模板目录（prompt 由 Agent 动态构建）
   - 新增 tools 参数（支持 function-calling）
 
-实现：OpenAI 兼容客户端（一个实现覆盖 DeepSeek/OpenAI/Claude/Ollama）
+实现：stdlib urllib.request + scheduler.run_blocking()（无需第三方 SDK）
+  文件：src/wheel/llm/imp/deepseek_engine.py  —  DeepSeekEngine
 ```
 
 ### W3. FileStorage（wheel）
@@ -372,6 +444,10 @@ class Tool(ABC):
 | ReadStorageTool | `read_storage` | `Storage.load_items()` | `date`, `filters` | JSON 历史数据 |
 | SaveStorageTool | `save_storage` | `Storage.save_items()` | `date`, `items_json` | "saved N items" |
 
+**SearchTool 说明**（v4.1）：
+  SearchTool 调用 Adapter.search()，Adapter 内部已使用 LLM 动态生成提取规则。
+  Tool 层无感——它收到的仍是 `UnifiedItem[]`，只负责序列化为 JSON 摘要发给 Agent。
+
 **搜索结果的 JSON 摘要格式**（Agent 不需要看到完整 UnifiedItem）：
 
 ```json
@@ -430,7 +506,7 @@ Agent                           LLMEngine       Tool(search)      Tool(storage)
 
 ---
 
-## 8. 模块依赖关系（新）
+## 8. 模块依赖关系（v4.1）
 
 ```
                          ┌──────────┐
@@ -440,21 +516,28 @@ Agent                           LLMEngine       Tool(search)      Tool(storage)
         ┌─────────────────────┼─────────────────────┐
         │                     │                     │
         ▼                     ▼                     ▼
-  ┌──────────┐        ┌──────────┐          ┌──────────┐
-  │ API Layer│        │  Agent   │          │ Platform │     ← core
-  └────┬─────┘        └──┬───┬───┘          │ Adapters │
-       │                 │   │              └──────────┘
-       │                 │   │
-       ▼                 ▼   ▼
-┌──────────────────────────────────────────────┐
-│                   wheel                      │
-│                                              │
-│  LLMEngine    BrowserManager    Scheduler    │
-│  FileStorage  Logger             Config      │
-└──────────────────────────────────────────────┘
+  ┌──────────┐        ┌──────────┐          ┌──────────────┐
+  │ API Layer│        │  Agent   │          │   Platform   │   ← core
+  └────┬─────┘        └──┬───┬───┘          │   Adapters   │
+       │                 │   │              └──┬───────┬───┘
+       │                 │   │                 │       │
+       ▼                 ▼   ▼                 ▼       ▼
+┌──────────────────────────────────────────────────────────┐
+│                        wheel                             │
+│                                                          │
+│  LLMEngine ◄─────── BrowserManager    Scheduler          │
+│     ▲                                                   │
+│     └──── Adapter 也可调用 LLMEngine（提取）              │
+│                                                          │
+│  FileStorage  Logger             Config                  │
+└──────────────────────────────────────────────────────────┘
 ```
 
-**依赖方向**：`core → wheel`（单向，不可逆）。`Agent → wheel`（调 LLMEngine/Storage/Adapter），`API → Agent`（封装 HTTP 请求），`Scheduler` 是通用定时回调器，不含 Agent import，绑定在 `main.py` 完成。
+**依赖方向**：`core → wheel`（单向，不可逆）。
+  - `Agent → wheel`（调 LLMEngine/Storage/Adapter）
+  - `Adapter → wheel`（BrowserManager + 可选 LLMEngine）
+  - `API → Agent`（封装 HTTP 请求）
+  - `Scheduler` 是通用定时回调器，不含 Agent import，绑定在 `main.py` 完成。
 
 ---
 
@@ -462,11 +545,12 @@ Agent                           LLMEngine       Tool(search)      Tool(storage)
 
 | 阶段 | 内容 | 说明 |
 |------|------|------|
-| 1 | **LLMEngine 实现** | `src/wheel/llm/imp/openai_compat.py`，`chat()` |
-| 2 | **Agent 实现** | `src/core/agent/imp/react_agent.py`，ReAct 循环 |
-| 3 | **Tool 具体实现** | SearchTool / StorageTool / ReportTool |
-| 4 | **Scheduler 实现** | `src/wheel/scheduler/imp/apscheduler_impl.py`，通用定时回调器 |
-| 5 | **API Layer 对接 Agent** | `POST /api/run` → `Agent.run()` |
+| 1 | **LLMEngine 实现** | `src/wheel/llm/imp/deepseek_engine.py` — DeepSeekEngine（stdlib urllib + scheduler） ✅ |
+| 2 | **Adapter LLM 提取接入** | `RedNoteAdapter` + 骨架提取 JS + LLM 生成 JS extractPosts |
+| 3 | **Agent 实现** | `src/core/agent/imp/react_agent.py`，ReAct 循环 |
+| 4 | **Tool 具体实现** | SearchTool / StorageTool / ReportTool |
+| 5 | **Scheduler 实现** | `src/wheel/scheduler/imp/apscheduler_impl.py`，通用定时回调器 |
+| 6 | **API Layer 对接 Agent** | `POST /api/run` → `Agent.run()` |
 
 ---
 
@@ -483,4 +567,4 @@ Agent                           LLMEngine       Tool(search)      Tool(storage)
 
 ---
 
-*文档版本：v4.0 | 最后更新：2026-04-25*
+*文档版本：v4.1 | 最后更新：2026-04-26*

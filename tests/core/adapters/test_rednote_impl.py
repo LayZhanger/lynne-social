@@ -79,15 +79,16 @@ class TestRedNoteAdapterTA:
         browser = BrowserManagerFactory().create(browser_cfg)
         await browser.start()
 
+        url_fields = {"search_url", "base_url", "user_url_template", "trending_url"}
+        url_kwargs = {k: kw.pop(k) for k in url_fields if k in kw}
+
         cfg_kw = {
             "platform": "rednote",
-            "search_url": "file://{keyword}",
-            "base_url": "file://placeholder",
             "scroll_delay": 0.05,
             "max_scrolls": 15,
         }
         cfg_kw.update(kw)
-        return RedNoteAdapter(browser, AdapterConfig(**cfg_kw)), browser
+        return RedNoteAdapter(browser, AdapterConfig(**cfg_kw), **url_kwargs), browser
 
     def _write_page(self, name: str, content: str) -> str:
         p = self._tmp_path / name
@@ -157,7 +158,7 @@ class TestRedNoteAdapterTA:
     async def test_health_check_ok(self):
         adapter, browser = await self._make_adapter()
         url = self._write_page("health_check.html", _health_check_html())
-        adapter._config.base_url = url
+        adapter._base_url = url
         try:
             ok = await adapter.health_check()
             assert ok is True

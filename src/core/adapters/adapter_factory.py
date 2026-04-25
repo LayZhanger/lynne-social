@@ -16,7 +16,7 @@ class AdapterFactory(Factory[BaseAdapter]):
 
     def create(self, config: object) -> BaseAdapter:
         if not isinstance(config, AdapterConfig):
-            config = AdapterConfig()
+            config = AdapterConfig(platform="rednote")
         browser = self._browser_factory.create(self._browser_config)
         self._log.info("creating adapter for platform {}", config.platform)
         if config.platform == "rednote":

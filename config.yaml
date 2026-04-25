@@ -4,9 +4,8 @@ server:
 
 llm:
   provider: "deepseek"
-  api_key: "${DEEPSEEK_API_KEY}"
+  api_key: "sk-placeholder"
   model: "deepseek-chat"
-  relevance_threshold: 6
 
 browser:
   headless: false

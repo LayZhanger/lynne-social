@@ -19,14 +19,28 @@ _NOTE_LIKES = ".like-wrapper .count, .count, .like-count"
 _NOTE_COVER = ".cover img, .img-container img, .feeds-page img"
 _NOTE_LINK = "a[href*='/explore/'], a[href*='/discovery/']"
 
+# RedNote URL constants (platform-specific, not in AdapterConfig)
+_SEARCH_URL = "https://www.xiaohongshu.com/search_result?keyword={keyword}"
+_USER_URL_TEMPLATE = "https://www.xiaohongshu.com/user/profile/{user_id}"
+_TRENDING_URL = "https://www.xiaohongshu.com/explore"
+_BASE_URL = "https://www.xiaohongshu.com"
+
 
 class RedNoteAdapter(BaseAdapter):
     platform_name = "rednote"
 
-    def __init__(self, browser_manager: BrowserManager, config: AdapterConfig):
+    def __init__(self, browser_manager: BrowserManager, config: AdapterConfig,
+                 *, search_url: str | None = None,
+                 user_url_template: str | None = None,
+                 trending_url: str | None = None,
+                 base_url: str | None = None):
         self._browser = browser_manager
         self._config = config
         self._log = get_logger("rednote")
+        self._search_url = search_url if search_url is not None else _SEARCH_URL
+        self._user_url_template = user_url_template if user_url_template is not None else _USER_URL_TEMPLATE
+        self._trending_url = trending_url if trending_url is not None else _TRENDING_URL
+        self._base_url = base_url if base_url is not None else _BASE_URL
 
     async def search(self, keywords: list[str], limit: int) -> AsyncIterator[UnifiedItem]:
         ctx = await self._browser.get_context(self.platform_name)
@@ -34,7 +48,7 @@ class RedNoteAdapter(BaseAdapter):
         try:
             await self._inject_stealth(page)
             keyword = " ".join(keywords)
-            url = self._config.search_url.replace("{keyword}", quote(keyword))
+            url = self._search_url.replace("{keyword}", quote(keyword))
             await page.goto(url, wait_until="domcontentloaded")
             async for item in self._scroll_and_extract(page, limit):
                 yield item
@@ -46,7 +60,7 @@ class RedNoteAdapter(BaseAdapter):
         page = await ctx.new_page()
         try:
             await self._inject_stealth(page)
-            url = self._config.user_url_template.replace("{user_id}", quote(user_id))
+            url = self._user_url_template.replace("{user_id}", quote(user_id))
             await page.goto(url, wait_until="domcontentloaded")
             async for item in self._scroll_and_extract(page, limit):
                 yield item
@@ -58,7 +72,7 @@ class RedNoteAdapter(BaseAdapter):
         page = await ctx.new_page()
         try:
             await self._inject_stealth(page)
-            await page.goto(self._config.trending_url, wait_until="domcontentloaded")
+            await page.goto(self._trending_url, wait_until="domcontentloaded")
             async for item in self._scroll_and_extract(page, limit):
                 yield item
         finally:
@@ -89,7 +103,7 @@ class RedNoteAdapter(BaseAdapter):
             ctx = await self._browser.get_context(self.platform_name)
             page = await ctx.new_page()
             try:
-                await page.goto(self._config.base_url, wait_until="domcontentloaded")
+                await page.goto(self._base_url, wait_until="domcontentloaded")
                 return True
             finally:
                 await page.close()
@@ -152,7 +166,7 @@ class RedNoteAdapter(BaseAdapter):
                 "author_name": author,
                 "title": title,
                 "content": content,
-                "url": link if link.startswith("http") else f"{self._config.base_url}{link}",
+                "url": link if link.startswith("http") else f"{self._base_url}{link}",
                 "likes": self._parse_int(likes_text),
                 "images": cover_srcs,
             }
