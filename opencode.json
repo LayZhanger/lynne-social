@@ -1,0 +1,10 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": ["AGENTS.md"],
+  "formatter": {
+    "ruff": {
+      "command": [".venv/bin/ruff", "check", "--fix", "$FILE"],
+      "extensions": [".py"]
+    }
+  }
+}
