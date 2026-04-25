@@ -2,7 +2,7 @@
 
 ## Project status
 
-Early development (v0.1.0). `src/core/` (business layer) and `src/main.py` (Composition Root) are **not yet built**. Only `src/common/` and `src/wheel/` exist so far.
+Early development (v0.2.0). `src/core/` (business layer) and `src/main.py` (Composition Root) are **not yet built**. `src/wheel/` modules are mostly complete (browser, config, storage, logger, scheduler), with `llm/` still skeleton.
 
 ## Architecture (hard rules)
 
@@ -10,6 +10,14 @@ Early development (v0.1.0). `src/core/` (business layer) and `src/main.py` (Comp
 - **Dependency inversion**: every module has ABC interface + factory + models + `imp/` implementation. No file outside `main.py` may import from `imp/`. Modules depend on interfaces only.
 - **Factory pattern**: all wiring happens via factories. Factories with dependencies receive them via `__init__` injection. `main.py` is the sole Composition Root.
 - **Module ABC**: all long-lived modules inherit `Module(ABC)` (`start`, `stop`, `health_check`, `name`).
+
+## Thread model (hard rules)
+
+- **Single asyncio event loop** for all I/O. Everything runs on it by default.
+- **`wheel/scheduler/` is the sole authorized thread pool.** No other module may import `threading`, `concurrent.futures`, `asyncio.to_thread`, or `loop.run_in_executor`.
+- **Blocking work**: if a module has unavoidable blocking work (CPU-heavy or sync library), use `scheduler.run_blocking(func, *args, **kwargs)` — never spawn your own thread. This method submits to the scheduler's semaphore-governed worker pool and returns an awaitable.
+- **All I/O must be async**: `aiofiles` / async Playwright / `httpx` / etc.
+- **Future direction**: `JsonlStorage` and `YamlConfigLoader` currently use sync file I/O — they'll be migrated to async (either native async or via `scheduler.run_blocking`) when the scheduler is wired into `main.py`.
 
 Per-module file layout:
 ```
@@ -68,4 +76,4 @@ Ruff and mypy are used but have no explicit config files (default settings). Run
 
 ## Git
 
-This repo is **not initialized as a git repo** (no `.git` directory).
+This repo has a `.git` directory and is under version control.

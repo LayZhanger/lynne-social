@@ -1,7 +1,9 @@
+import asyncio
 import re
 import threading
 import time
 from datetime import datetime, timedelta
+from typing import Any, Callable
 
 from src.wheel.scheduler.scheduler import JobStatus, Scheduler
 from src.wheel.scheduler.scheduler_models import SchedulerConfig
@@ -34,6 +36,7 @@ class SimpleScheduler(Scheduler):
         self._lock = threading.RLock()
         self._loop_thread: threading.Thread | None = None
         self._started = False
+        self._semaphore = threading.Semaphore(self._config.max_workers)
 
     @property
     def name(self) -> str:
@@ -83,8 +86,25 @@ class SimpleScheduler(Scheduler):
                 for job in self._jobs.values()
             ]
 
+    async def run_blocking(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future = loop.create_future()
+
+        def _wrapper():
+            self._semaphore.acquire()
+            try:
+                result = func(*args, **kwargs)
+                loop.call_soon_threadsafe(future.set_result, result)
+            except Exception as e:
+                loop.call_soon_threadsafe(future.set_exception, e)
+            finally:
+                self._semaphore.release()
+
+        thread = threading.Thread(target=_wrapper, daemon=True)
+        thread.start()
+        return await future
+
     def _loop(self) -> None:
-        semaphore = threading.Semaphore(self._config.max_workers)
         while self._running:
             with self._lock:
                 now = time.time()
@@ -94,7 +114,7 @@ class SimpleScheduler(Scheduler):
                         if entry._running:
                             continue
                         entry.next_run = now + entry.interval
-                        t = threading.Thread(target=self._fire_entry, args=(entry, semaphore), daemon=True)
+                        t = threading.Thread(target=self._fire_entry, args=(entry, self._semaphore), daemon=True)
                         t.start()
                     nearest = min(nearest, entry.next_run)
             time.sleep(min(0.1, max(0, nearest - time.time())))

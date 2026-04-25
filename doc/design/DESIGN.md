@@ -470,4 +470,17 @@ Agent                           LLMEngine       Tool(search)      Tool(storage)
 
 ---
 
+## 10. 执行模型（线程模型）
+
+**硬规则**：
+
+1. **单一 asyncio 事件循环** — 所有 I/O 都跑在同一个 event loop 上。
+2. **`wheel/scheduler/` 是唯一授权的线程池** — 其他模块禁止 import `threading`、`concurrent.futures`、`asyncio.to_thread`、`loop.run_in_executor`。
+3. **阻塞工作** — 如果模块必须执行阻塞操作（CPU 密集 / 同步库），通过 `scheduler.run_blocking(func, *args, **kwargs)` 提交到 Scheduler 的 semaphore 管理线程池，返回 awaitable 取回结果。
+4. **所有 I/O 必须异步** — `aiofiles` / async Playwright / `httpx` 等。
+
+**架构理由**：单事件循环避免竞态条件、简化调试。Scheduler 集中管理线程资源防止线程泄漏。`run_blocking` 提供统一的异步→同步桥接，让 CPU 工作和 I/O 工作在同一调度框架下。
+
+---
+
 *文档版本：v4.0 | 最后更新：2026-04-25*

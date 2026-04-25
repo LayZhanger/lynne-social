@@ -262,3 +262,80 @@ class TestSimpleSchedulerTA:
         await s.stop()
         assert len(results) >= 2
 
+    @pytest.mark.asyncio
+    async def test_run_blocking_returns_result(self):
+        s = SimpleScheduler()
+        await s.start()
+        result = await s.run_blocking(lambda x, y: x + y, 10, 20)
+        assert result == 30
+        await s.stop()
+
+    @pytest.mark.asyncio
+    async def test_run_blocking_with_kwargs(self):
+        s = SimpleScheduler()
+        await s.start()
+        result = await s.run_blocking(lambda a=0, b=0: a * b, a=6, b=7)
+        assert result == 42
+        await s.stop()
+
+    @pytest.mark.asyncio
+    async def test_run_blocking_propagates_exception(self):
+        s = SimpleScheduler()
+
+        def fail():
+            raise ValueError("expected")
+
+        await s.start()
+        with pytest.raises(ValueError, match="expected"):
+            await s.run_blocking(fail)
+        await s.stop()
+
+    @pytest.mark.asyncio
+    async def test_run_blocking_respects_max_workers(self):
+        running = 0
+        max_seen = 0
+        lock = threading.Lock()
+        results = []
+
+        def slow():
+            nonlocal running, max_seen
+            with lock:
+                running += 1
+                max_seen = max(max_seen, running)
+            time.sleep(0.3)
+            with lock:
+                running -= 1
+            results.append(1)
+
+        s = SimpleScheduler(config=SchedulerConfig(max_workers=2))
+        await s.start()
+        tasks = [s.run_blocking(slow) for _ in range(5)]
+        await asyncio.gather(*tasks)
+        await s.stop()
+        assert max_seen <= 2
+        assert len(results) == 5
+
+    @pytest.mark.asyncio
+    async def test_run_blocking_requires_event_loop(self):
+        s = SimpleScheduler()
+        await s.start()
+        result = await s.run_blocking(lambda: 42)
+        assert result == 42
+        await s.stop()
+
+    @pytest.mark.asyncio
+    async def test_run_blocking_string_result(self):
+        s = SimpleScheduler()
+        await s.start()
+        result = await s.run_blocking(lambda: "hello")
+        assert result == "hello"
+        await s.stop()
+
+    @pytest.mark.asyncio
+    async def test_run_blocking_none_result(self):
+        s = SimpleScheduler()
+        await s.start()
+        result = await s.run_blocking(lambda: None)
+        assert result is None
+        await s.stop()
+

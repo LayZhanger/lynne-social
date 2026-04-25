@@ -20,10 +20,14 @@ class JobStatus:
 
 class Scheduler(Module, ABC):
     """
-    Generic timed callback scheduler.
+    Generic timed callback scheduler + thread-pool executor.
 
     This module has ZERO imports from core/ — it is a pure wheel component.
     Agent binding happens in main.py (composition root).
+
+    It is the **sole authorized thread pool** in the project.
+    No other module may spawn threads or use concurrent.futures.
+    For blocking work, use run_blocking().
     """
 
     @abstractmethod
@@ -54,4 +58,14 @@ class Scheduler(Module, ABC):
     @abstractmethod
     def health_check(self) -> bool:
         """Check if the underlying scheduler engine is alive."""
+        ...
+
+    @abstractmethod
+    async def run_blocking(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        """
+        Execute a blocking function on the scheduler's worker thread pool.
+
+        This is the ONLY approved way to run blocking code off the event loop.
+        Returns the function's result. Propagates exceptions.
+        """
         ...
