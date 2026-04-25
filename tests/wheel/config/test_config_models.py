@@ -28,9 +28,8 @@ class TestLLMConfigUT:
         cfg = LLMConfig()
         assert cfg.provider == "deepseek"
         assert cfg.model == "deepseek-chat"
-        assert cfg.relevance_threshold == 6
-        assert cfg.temperature == 0.3
-        assert cfg.max_tokens == 200
+        assert cfg.temperature == 0.7
+        assert cfg.max_tokens == 4096
         assert cfg.timeout == 60
         assert cfg.api_key == ""
 
@@ -76,24 +75,19 @@ class TestTaskConfigUT:
         cfg = TaskConfig(name="test_task")
         assert cfg.name == "test_task"
         assert cfg.platforms == []
-        assert cfg.topic == ""
-        assert cfg.keywords == []
+        assert cfg.intent == ""
         assert cfg.schedule == "manual"
-        assert cfg.limit == 20
 
     def test_full(self):
         cfg = TaskConfig(
             name="AI监控",
             platforms=["twitter", "rednote"],
-            topic="大模型进展",
-            keywords=["AI", "LLM"],
-            user_ids=["user1"],
+            intent="大模型进展",
             schedule="every 4 hours",
-            limit=30,
         )
         assert cfg.name == "AI监控"
         assert len(cfg.platforms) == 2
-        assert cfg.limit == 30
+        assert cfg.intent == "大模型进展"
 
 
 class TestConfigUT:
@@ -121,9 +115,8 @@ class TestConfigUT:
                 "provider": "deepseek",
                 "api_key": "${DEEPSEEK_API_KEY}",
                 "model": "deepseek-chat",
-                "relevance_threshold": 7,
-                "temperature": 0.1,
-                "max_tokens": 300,
+                "temperature": 0.3,
+                "max_tokens": 4096,
                 "timeout": 90,
             },
             "browser": {
@@ -143,14 +136,13 @@ class TestConfigUT:
                 {
                     "name": "AI动态",
                     "platforms": ["twitter"],
-                    "topic": "AI news",
+                    "intent": "关注AI新闻",
                     "schedule": "every 4 hours",
                 }
             ],
         }
         cfg = Config.model_validate(data)
         assert cfg.server.port == 8888
-        assert cfg.llm.relevance_threshold == 7
         assert cfg.browser.headless is True
         assert cfg.platforms["twitter"].enabled is True
         assert len(cfg.tasks) == 1

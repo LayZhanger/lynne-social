@@ -1,4 +1,4 @@
-from src.core.browser.browser_models import BrowserConfig
+from src.wheel.browser.browser_models import BrowserConfig
 
 
 class TestBrowserConfigUT:

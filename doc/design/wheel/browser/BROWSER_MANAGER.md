@@ -1,8 +1,8 @@
 # BrowserManager 详细设计
 
-> 所属层：`core/` 业务层 — 浏览器引擎
+> 所属层：`wheel/` 基础设施 — 浏览器引擎
 > 依赖：`wheel/logger`（日志），无其他 core 模块依赖
-> 源码：`src/core/browser/`
+> 源码：`src/wheel/browser/`
 >
 > **本文分两部分**：第 1-3 节定义抽象规范（与实现无关），第 4-5 节描述当前 Playwright 实现。
 

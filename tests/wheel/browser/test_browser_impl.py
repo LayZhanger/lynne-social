@@ -3,9 +3,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.core.browser.browser_factory import BrowserManagerFactory
-from src.core.browser.browser_manager import BrowserContext
-from src.core.browser.browser_models import BrowserConfig
+from src.wheel.browser.browser_factory import BrowserManagerFactory
+from src.wheel.browser.browser_manager import BrowserContext
+from src.wheel.browser.browser_models import BrowserConfig
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

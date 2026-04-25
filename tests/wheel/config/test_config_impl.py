@@ -56,7 +56,6 @@ class TestYamlConfigLoaderTA:
         assert cfg.server.auto_open_browser is False
         assert cfg.llm.provider == "openai"
         assert cfg.llm.model == "gpt-4"
-        assert cfg.llm.relevance_threshold == 7
         assert cfg.browser.headless is True
         assert cfg.browser.slow_mo == 200
 
@@ -74,7 +73,7 @@ class TestYamlConfigLoaderTA:
         task = cfg.tasks[0]
         assert task.name == "AI动态"
         assert task.platforms == ["twitter"]
-        assert task.topic == "AI news"
+        assert task.intent == "关注AI大模型的最新进展"
         assert task.schedule == "every 4 hours"
 
     def test_reload(self, sample_yaml_file, tmp_path):
@@ -119,14 +118,14 @@ class TestYamlConfigLoaderTA:
         assert cfg.platforms["twitter"].session_file == "tk-abc"
 
     def test_env_var_in_list(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("KW", "AI")
-        content = "tasks:\n  - name: test\n    keywords:\n      - ${KW}\n"
+        monkeypatch.setenv("PLATFORM", "twitter")
+        content = "tasks:\n  - name: test\n    platforms:\n      - ${PLATFORM}\n"
         path = tmp_path / "config.yaml"
         path.write_text(content, encoding="utf-8")
 
         loader = YamlConfigLoader(str(path))
         cfg = loader.load()
-        assert cfg.tasks[0].keywords == ["AI"]
+        assert cfg.tasks[0].platforms == ["twitter"]
 
     def test_config_property_raises_before_load(self, tmp_path):
         loader = YamlConfigLoader(str(tmp_path / "nofile.yaml"))

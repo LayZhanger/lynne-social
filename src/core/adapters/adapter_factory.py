@@ -1,6 +1,6 @@
 from src.common import Factory
-from src.core.browser.browser_manager import BrowserManager
-from src.core.browser.browser_models import BrowserConfig
+from src.wheel.browser.browser_manager import BrowserManager
+from src.wheel.browser.browser_models import BrowserConfig
 from src.wheel.logger import get_logger
 
 from .base_adapter import BaseAdapter

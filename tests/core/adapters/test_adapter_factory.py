@@ -3,8 +3,8 @@ from src.core.adapters.adapter_factory import AdapterFactory
 from src.core.adapters.adapter_models import AdapterConfig
 from src.core.adapters.base_adapter import BaseAdapter
 from src.core.adapters.imp.rednote_adapter import RedNoteAdapter
-from src.core.browser.browser_manager import BrowserManager
-from src.core.browser.browser_models import BrowserConfig
+from src.wheel.browser.browser_manager import BrowserManager
+from src.wheel.browser.browser_models import BrowserConfig
 
 
 class _StubBrowserManager(BrowserManager):

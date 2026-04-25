@@ -61,9 +61,8 @@ llm:
 tasks:
   - name: "AI行业动态"
     platforms: [twitter, rednote]
-    topic: "关注AI大模型的最新进展"
+    intent: "关注AI大模型的最新进展"
     schedule: "every 4 hours"
-    limit: 20
 ```
 
 ### 2.3 CLI 保留（可选）
@@ -332,4 +331,4 @@ data/
 
 ---
 
-*文档版本：v3.0 | 最后更新：2026-04-25*
+*文档版本：v3.1 | 最后更新：2026-04-25*

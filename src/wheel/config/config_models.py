@@ -11,12 +11,8 @@ class LLMConfig(BaseModel):
     api_key: str = ""
     base_url: str = ""
     model: str = "deepseek-chat"
-    model_filter: str = ""
-    model_extract: str = ""
-    model_report: str = ""
-    relevance_threshold: int = 6
-    temperature: float = 0.3
-    max_tokens: int = 200
+    temperature: float = 0.7
+    max_tokens: int = 4096
     timeout: int = 60
 
 
@@ -38,11 +34,8 @@ class PlatformConfig(BaseModel):
 class TaskConfig(BaseModel):
     name: str
     platforms: list[str] = Field(default_factory=list)
-    topic: str = ""
-    keywords: list[str] = Field(default_factory=list)
-    user_ids: list[str] = Field(default_factory=list)
+    intent: str = ""
     schedule: str = "manual"
-    limit: int = 20
 
 
 class Config(BaseModel):

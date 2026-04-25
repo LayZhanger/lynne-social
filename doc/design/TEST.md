@@ -236,7 +236,7 @@ class TestLLMConfigUT:
     def test_defaults(self):
         cfg = LLMConfig()
         assert cfg.provider == "deepseek"
-        assert cfg.relevance_threshold == 6
+        assert cfg.model == "deepseek-chat"
 
     def test_api_key_required_for_full_config(self):
         cfg = LLMConfig(api_key="sk-xxx")
@@ -310,16 +310,16 @@ doc/tests/
 │   ├── config/
 │   │   ├── 测试方案.md      # config 模块 UT + TA
 │   │   └── 测试结果.md
-│   └── storage/
-│       ├── 测试方案.md      # storage 模块 UT + TA
+│   ├── storage/
+│   │   ├── 测试方案.md      # storage 模块 UT + TA
+│   │   └── 测试结果.md
+│   └── browser/
+│       ├── 测试方案.md      # browser 模块 UT + TA
 │       └── 测试结果.md
 └── core/
-    ├── browser/
-    ├── adapters/
-    ├── llm/
-    ├── orchestrator/
-    ├── scheduler/
-    └── api/
+    └── adapters/
+        ├── 测试方案.md      # adapters 模块 UT + TA
+        └── 测试结果.md
 ```
 
 ### 测试方案.md 模板
@@ -376,4 +376,4 @@ pytest tests/{path}/ -v
 
 ---
 
-*文档版本：v1.1 | 最后更新：2026-04-25*
+*文档版本：v1.2 | 最后更新：2026-04-25*

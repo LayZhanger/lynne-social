@@ -1,7 +1,7 @@
-from src.core.browser.browser_factory import BrowserManagerFactory
-from src.core.browser.browser_manager import BrowserManager
-from src.core.browser.browser_models import BrowserConfig
-from src.core.browser.imp.playwright_browser_manager import PlaywrightBrowserManager
+from src.wheel.browser.browser_factory import BrowserManagerFactory
+from src.wheel.browser.browser_manager import BrowserManager
+from src.wheel.browser.browser_models import BrowserConfig
+from src.wheel.browser.imp.playwright_browser_manager import PlaywrightBrowserManager
 
 
 class TestBrowserManagerFactoryUT:

@@ -4,7 +4,7 @@ from typing import AsyncIterator
 from urllib.parse import quote
 
 from src.common.models import UnifiedItem
-from src.core.browser.browser_manager import BrowserManager
+from src.wheel.browser.browser_manager import BrowserManager
 from src.wheel.logger import get_logger
 
 from ..base_adapter import BaseAdapter

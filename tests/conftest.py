@@ -33,7 +33,6 @@ llm:
   provider: openai
   api_key: sk-test
   model: gpt-4
-  relevance_threshold: 7
 browser:
   headless: true
   slow_mo: 200
@@ -45,8 +44,7 @@ platforms:
 tasks:
   - name: "AI动态"
     platforms: ["twitter"]
-    topic: "AI news"
-    keywords: ["AI", "LLM"]
+    intent: "关注AI大模型的最新进展"
     schedule: "every 4 hours"
 """
 
