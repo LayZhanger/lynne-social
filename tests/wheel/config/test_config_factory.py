@@ -1,5 +1,3 @@
-import os
-
 from src.wheel.config.config_factory import ConfigLoaderFactory
 from src.wheel.config.config_loader import ConfigLoader
 from src.wheel.config.imp.yaml_config_loader import YamlConfigLoader
@@ -10,6 +8,7 @@ class TestConfigLoaderFactoryUT:
         monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
         loader = ConfigLoaderFactory().create(None)
         assert isinstance(loader, YamlConfigLoader)
+        assert loader._scheduler is not None
 
     def test_create_with_path(self, tmp_path, monkeypatch):
         monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")

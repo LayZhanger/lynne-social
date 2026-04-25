@@ -4,6 +4,8 @@ from pathlib import Path
 
 import yaml
 
+from src.wheel.scheduler.scheduler_factory import SchedulerFactory
+
 from ..config_loader import ConfigLoader
 from ..config_models import Config
 
@@ -35,25 +37,32 @@ class YamlConfigLoader(ConfigLoader):
     def __init__(self, path: str = "config.yaml"):
         self._path = Path(path)
         self._config: Config | None = None
-        self.load()
+        self._scheduler = SchedulerFactory().create(None)
 
-    def load(self) -> Config:
-        self._config = self._load_from_file()
+    async def load(self) -> Config:
+        self._config = await self._load_from_file()
         return self._config
 
-    def reload(self) -> Config:
-        return self.load()
+    async def reload(self) -> Config:
+        return await self.load()
 
-    def _load_from_file(self) -> Config:
-        if not self._path.exists():
+    async def _load_from_file(self) -> Config:
+        raw_text = await self._scheduler.run_blocking(self._read_file_sync)
+
+        if raw_text is None:
             return Config()
 
-        raw = yaml.safe_load(self._path.read_text(encoding="utf-8"))
+        raw = yaml.safe_load(raw_text)
         if raw is None:
             return Config()
 
         raw = _resolve_env_recursive(raw)
         return Config.model_validate(raw)
+
+    def _read_file_sync(self) -> str | None:
+        if not self._path.exists():
+            return None
+        return self._path.read_text(encoding="utf-8")
 
     @property
     def config(self) -> Config:

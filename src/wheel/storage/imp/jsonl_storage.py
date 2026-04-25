@@ -3,6 +3,7 @@ from datetime import datetime
 from pathlib import Path
 
 from src.common import UnifiedItem
+from src.wheel.scheduler.scheduler_factory import SchedulerFactory
 
 from ..storage import Storage
 
@@ -10,6 +11,7 @@ from ..storage import Storage
 class JsonlStorage(Storage):
     def __init__(self, data_dir: str = "data"):
         self._data_dir = Path(data_dir)
+        self._scheduler = SchedulerFactory().create(None)
 
     @property
     def name(self) -> str:
@@ -33,15 +35,21 @@ class JsonlStorage(Storage):
     def _today_str() -> str:
         return datetime.now().strftime("%Y-%m-%d")
 
-    def save_items(self, items: list[UnifiedItem], date: str | None = None) -> None:
+    async def save_items(self, items: list[UnifiedItem], date: str | None = None) -> None:
         date = date or self._today_str()
+        await self._scheduler.run_blocking(self._save_items_sync, items, date)
+
+    def _save_items_sync(self, items: list[UnifiedItem], date: str) -> None:
         path = self._date_dir(date) / "items.jsonl"
         with open(path, "a", encoding="utf-8") as f:
             for item in items:
                 f.write(item.to_json() + "\n")
 
-    def load_items(self, date: str | None = None, *, platform: str | None = None) -> list[UnifiedItem]:
+    async def load_items(self, date: str | None = None, *, platform: str | None = None) -> list[UnifiedItem]:
         date = date or self._today_str()
+        return await self._scheduler.run_blocking(self._load_items_sync, date, platform=platform)
+
+    def _load_items_sync(self, date: str, *, platform: str | None = None) -> list[UnifiedItem]:
         path = self._data_dir / date / "items.jsonl"
         if not path.exists():
             return []
@@ -56,31 +64,46 @@ class JsonlStorage(Storage):
             items.append(item)
         return items
 
-    def save_report(self, markdown: str, date: str | None = None) -> None:
+    async def save_report(self, markdown: str, date: str | None = None) -> None:
         date = date or self._today_str()
+        await self._scheduler.run_blocking(self._save_report_sync, markdown, date)
+
+    def _save_report_sync(self, markdown: str, date: str) -> None:
         path = self._date_dir(date) / "report.md"
         path.write_text(markdown, encoding="utf-8")
 
-    def load_report(self, date: str | None = None) -> str | None:
+    async def load_report(self, date: str | None = None) -> str | None:
         date = date or self._today_str()
+        return await self._scheduler.run_blocking(self._load_report_sync, date)
+
+    def _load_report_sync(self, date: str) -> str | None:
         path = self._data_dir / date / "report.md"
         if not path.exists():
             return None
         return path.read_text(encoding="utf-8")
 
-    def save_summary(self, summary: dict, date: str | None = None) -> None:
+    async def save_summary(self, summary: dict, date: str | None = None) -> None:
         date = date or self._today_str()
+        await self._scheduler.run_blocking(self._save_summary_sync, summary, date)
+
+    def _save_summary_sync(self, summary: dict, date: str) -> None:
         path = self._date_dir(date) / "summary.json"
         path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    def load_summary(self, date: str | None = None) -> dict | None:
+    async def load_summary(self, date: str | None = None) -> dict | None:
         date = date or self._today_str()
+        return await self._scheduler.run_blocking(self._load_summary_sync, date)
+
+    def _load_summary_sync(self, date: str) -> dict | None:
         path = self._data_dir / date / "summary.json"
         if not path.exists():
             return None
         return json.loads(path.read_text(encoding="utf-8"))
 
-    def list_dates(self) -> list[str]:
+    async def list_dates(self) -> list[str]:
+        return await self._scheduler.run_blocking(self._list_dates_sync)
+
+    def _list_dates_sync(self) -> list[str]:
         if not self._data_dir.exists():
             return []
         dates = []
