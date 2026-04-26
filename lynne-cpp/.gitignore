@@ -1,0 +1,43 @@
+# Lynne C++ build artifacts
+
+# Build directories
+build/
+dist/
+
+# Object files
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+
+# Executables
+*.exe
+
+# IDE
+.vscode/
+.idea/
+CMakeLists.txt.user
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+
+# Temporary files
+*.tmp
+*.log
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data directories (runtime)
+data/
+sessions/
+*.state.json
