@@ -100,6 +100,31 @@ git clone --depth 1 --branch v1.14.0 https://github.com/google/googletest.git
 
 ## 3. CMake 构建规范
 
+### 依赖产出物（dist/）
+
+`build-deps.sh` 将 third_party/ 编译后输出到 `dist/`。**项目自身编译产物也输出到 dist/**：
+
+```
+dist/
+├── include/                  # 第三方头文件
+│   ├── json.hpp              # nlohmann/json（单头，扁平，无子目录！）
+│   ├── httplib.h             # cpp-httplib（单头）
+│   ├── spdlog/               # spdlog（header-only）
+│   ├── uv.h + uv/            # libuv 头文件
+│   └── ixwebsocket/          # IXWebSocket 头文件
+├── lib/                      # 所有静态库（第三方 + 项目）
+│   ├── libuv.a / .so         # libuv（build-deps.sh 产出）
+│   ├── libixwebsocket.a      # IXWebSocket（build-deps.sh 产出）
+│   ├── liblynne_common.a     # 项目模块（build.sh 产出）
+│   ├── liblynne_logger.a     # 项目模块（build.sh 产出）
+│   ├── libgtest.a / ...      # googletest（build.sh 产出）
+│   └── libgmock.a / ...      # googlemock（build.sh 产出）
+└── bin/                      # 所有可执行文件
+    └── test_*                # 测试程序（build.sh 产出）
+```
+
+**重要**：`json.hpp` 是扁平安装的，include 用 `#include <json.hpp>`，不是 `<nlohmann/json.hpp>`。
+
 ### 顶层 CMakeLists.txt
 
 ```cmake
@@ -109,12 +134,12 @@ project(lynne VERSION 0.1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-set(THIRD_PARTY_DIR ${CMAKE_SOURCE_DIR}/third_party)
+set(DIST_DIR ${CMAKE_SOURCE_DIR}/dist)
 
-# 需编译的依赖
-set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
-add_subdirectory(${THIRD_PARTY_DIR}/libuv)
-add_subdirectory(${THIRD_PARTY_DIR}/IXWebSocket)
+# All build outputs → dist/
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${DIST_DIR}/lib)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${DIST_DIR}/lib)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${DIST_DIR}/bin)
 
 add_subdirectory(src)
 
@@ -128,47 +153,144 @@ endif()
 ### src/CMakeLists.txt
 
 ```cmake
-set(COMMON_INCLUDES
-    ${THIRD_PARTY_DIR}/nlohmann
-    ${THIRD_PARTY_DIR}/cpp-httplib
-    ${THIRD_PARTY_DIR}/spdlog/include
-    ${THIRD_PARTY_DIR}/IXWebSocket
-    ${THIRD_PARTY_DIR}/libuv/include
-)
-
 add_subdirectory(common)
-add_subdirectory(wheel/config)
 add_subdirectory(wheel/logger)
-add_subdirectory(wheel/storage)
-add_subdirectory(wheel/scheduler)
-add_subdirectory(wheel/llm)
-add_subdirectory(wheel/browser)
-add_subdirectory(core/adapters)
-add_subdirectory(core/agent)
+# ... 其他模块按需添加
+```
 
-add_executable(lynne main.cpp)
-target_include_directories(lynne PRIVATE ${COMMON_INCLUDES})
-target_link_libraries(lynne PRIVATE
-    lynne_common lynne_config lynne_logger lynne_storage
-    lynne_scheduler lynne_llm lynne_browser lynne_adapters lynne_agent
-    uv_a ixwebsocket
+只做聚合，不在这一层设 include 路径。
+
+### 模块 CMakeLists.txt（以 common 为例）
+
+```cmake
+add_library(lynne_common STATIC models.cpp)
+
+target_include_directories(lynne_common PUBLIC
+    ${CMAKE_SOURCE_DIR}/src            # 内部头文件： #include "common/module.h"
+    ${CMAKE_SOURCE_DIR}/dist/include   # 第三方头文件： #include <json.hpp>
 )
 ```
+
+### 模块 CMakeLists.txt（以 logger 为例，依赖 common）
+
+```cmake
+add_library(lynne_logger STATIC
+    logger_models.cpp
+    logger_factory.cpp
+    imp/spdlog_logger.cpp
+)
+
+target_include_directories(lynne_logger PUBLIC
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/dist/include
+)
+
+target_link_libraries(lynne_logger PUBLIC lynne_common)
+```
+
+### 依赖规则（硬规则）
+
+| 依赖类型 | 来源 | include 写法 | CMake 配置 |
+|---------|------|-------------|-----------|
+| **第三方头文件** | `dist/include/` | `#include <json.hpp>` | `target_include_directories(... PUBLIC ${DIST_DIR}/include)` |
+| **项目头文件** | `src/` | `#include "common/module.h"` | `target_include_directories(... PUBLIC ${CMAKE_SOURCE_DIR}/src)` |
+| **库文件 (.a)** | `dist/lib/` | —（CMake target 自动解析完整路径） | `target_link_libraries(... PUBLIC lynne_foo)` |
+
+**原理**：
+- 项目头文件从 `src/` 直接引用，不安装到 dist。`src/` 是唯一的项目源码树，所有 `#include "common/..."` `#include "wheel/logger/..."` 都从此解析。
+- 第三方头文件从 `dist/include/` 引用。`dist/` 是唯一的第三方产物树。
+- CMake target 系统自动使用完整路径 `dist/lib/liblynne_foo.a` 链接，不需要 `link_directories()`。
+- 每个 target 自己声明 `target_include_directories`，不用全局 `include_directories()`。
+
+**禁止**：
+- ❌ 不要把项目头文件装到 `dist/include/` — 保持 `src/` → 项目、`dist/` → 第三方 的清晰边界
+- ❌ 不要用 `link_directories()` — target 系统自动处理
+- ❌ 不要用全局 `include_directories()` — 每个 target 自声明
+- ❌ `#include` 不要写 `src/` 前缀 — include path 是 `src/`，写 `"common/module.h"` 而不是 `"src/common/module.h"`
+
+**模块 CMakeLists.txt 必须包含的两个 include**：
+```cmake
+target_include_directories(lynne_foo PUBLIC
+    ${CMAKE_SOURCE_DIR}/src            # ← 项目头文件
+    ${CMAKE_SOURCE_DIR}/dist/include   # ← 第三方头文件
+)
+```
+
+**规则**：
+- 每个模块是一个 `STATIC` 库
+- 库间依赖用 `target_link_libraries`，只链实际需要的
 
 ### tests/CMakeLists.txt
 
 ```cmake
+set(THIRD_PARTY_DIR ${CMAKE_SOURCE_DIR}/third_party)
+set(DIST_DIR ${CMAKE_SOURCE_DIR}/dist)
+
+# googletest 从源码编译
+set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 add_subdirectory(${THIRD_PARTY_DIR}/googletest gtest)
 
-function(add_lynne_test NAME)
-    add_executable(${NAME} ${ARGN})
-    target_include_directories(${NAME} PRIVATE ${COMMON_INCLUDES})
-    target_link_libraries(${NAME} ${ARGN})
-    add_test(NAME ${NAME} COMMAND ${NAME})
+# googletest internal_utils.cmake 强制设 ARCHIVE_OUTPUT → ${CMAKE_BINARY_DIR}/lib
+# 必须覆盖，使 gtest/gmock .a 也进 dist/lib/
+set_target_properties(gtest gtest_main gmock gmock_main PROPERTIES
+    ARCHIVE_OUTPUT_DIRECTORY "${DIST_DIR}/lib"
+)
+
+set(GTEST_INCLUDE_DIR ${THIRD_PARTY_DIR}/googletest/googletest/include)
+
+set(COMMON_TEST_INCLUDES
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/dist/include
+    ${GTEST_INCLUDE_DIR}
+)
+
+function(add_lynne_test TARGET)
+    add_executable(${TARGET} ${ARGN})
+    target_include_directories(${TARGET} PRIVATE ${COMMON_TEST_INCLUDES})
+    target_link_libraries(${TARGET} gtest gtest_main)
+    # gtest_main provides main(); order: gtest then gtest_main
+    add_test(NAME ${TARGET} COMMAND ${TARGET})
 endfunction()
 
-add_lynne_test(test_config wheel/config/test_config_loader.cpp lynne_config gtest gtest_main)
-# ... 其他测试
+function(add_lynne_ta TARGET)
+    add_executable(${TARGET} ${ARGN})
+    target_include_directories(${TARGET} PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/dist/include
+    )
+    # standalone main() — no gtest dependency
+    add_test(NAME ${TARGET} COMMAND ${TARGET})
+endfunction()
+
+add_subdirectory(common)
+add_subdirectory(wheel/logger)
+```
+
+### tests/module/CMakeLists.txt（以 common 为例）
+
+```cmake
+# UT — 使用 gtest
+add_lynne_test(test_models_ut test_models_ut.cpp)
+target_link_libraries(test_models_ut lynne_common)
+
+# TA — standalone 程序，不依赖 gtest
+add_lynne_ta(test_models_ta test_models_ta.cpp)
+target_link_libraries(test_models_ta lynne_common)
+```
+
+**规则**：
+- UT 用 `add_lynne_test`（链接 gtest），TA 用 `add_lynne_ta`（无 gtest，自带 `main()`）
+- 测试文件按模块分目录：`tests/common/`, `tests/wheel/logger/`
+- googletest 从 third_party/ 源码编译，不走 dist/
+
+### 构建流程
+
+```bash
+./build.sh            # 增量编译（configure + build → dist/）
+./build.sh --clean    # 清 build/ + dist/ 产出，重编译
+./build.sh --test     # 编译 + 运行全部测试
+./build.sh --deps     # 先编译依赖，再编译项目
+./build.sh --all      # 全流程：deps → clean → configure → build → test
 ```
 
 ---
@@ -339,28 +461,115 @@ int main() {
 
 | # | Python 模块 | 行数 | C++ 模块 | 预计行数 | 难度 | C++ 关键依赖 |
 |---|-----------|:---:|---------|:---:|:---:|------------|
-| 1 | config | 130 | wheel/config | 150 | ★ | nlohmann/json |
-| 2 | logger | 40 | wheel/logger | 80 | ★ | spdlog |
-| 3 | storage | 140 | wheel/storage | 150 | ★ | nlohmann/json |
-| 4 | common | 100 | common | 100 | ★★ | 无 |
+| 1 | common | 100 | common | 100 | ★★ | nlohmann/json |
+| 2 | logger | 40 | wheel/logger | 130 | ★ | spdlog |
+| 3 | config | 130 | wheel/config | 150 | ★ | nlohmann/json |
+| 4 | storage | 140 | wheel/storage | 150 | ★ | nlohmann/json |
 | 5 | scheduler | 230 | wheel/scheduler | 250 | ★★★ | libuv |
 | 6 | llm | 130 | wheel/llm | 120 | ★★ | cpp-httplib + libuv |
 | 7 | browser | 220 | wheel/browser | 600 | ★★★★★ | IXWebSocket + libuv |
 | 8 | adapters | 730 | core/adapters | 700 | ★★★★ | browser |
 | 9 | agent | 40 | core/agent | 80 | ★★ | adapters |
 
+> **已实现**：common + logger + config（含 UT/TA 测试，编译通过）
+> **推荐顺序**：common → logger → config → storage → scheduler → llm → browser → adapters → agent
+
 **每个模块的 C++ 文件布局**（镜像原 Python）：
 
 ```
 wheel/{module}/
-├── {module}.h             # 抽象接口（替代 ABC .py）
-├── {module}_models.h      # 数据结构（替代 Pydantic _models.py）
-├── {module}_factory.h     # 工厂类声明
-├── {module}_factory.cpp   # 工厂 create() 实现
+├── {module}.h             # 抽象接口（extends Module）
+├── {module}_models.h      # 数据结构（Pydantic BaseModel → struct + from_json）
+├── {module}_models.cpp    # JSON 序列化实现（每个 struct 1 个 cpp）
+├── {module}_factory.h     # 工厂声明
+├── {module}_factory.cpp   # 工厂 create() 实现（唯一引入 imp/ 的文件）
+├── {module}_macros.h      # [可选] 宏 / 头文件辅助（如 logger_macros.h）
+├── CMakeLists.txt
 └── imp/
     ├── {impl}.h           # 实现类声明
     └── {impl}.cpp         # 实现
 ```
+
+### logger 模块实际文件清单（参考实现）
+
+```
+wheel/logger/
+├── CMakeLists.txt
+├── logger.h               # Logger ABC : public Module, 新增 LogLevel 枚举
+├── logger_models.h        # LogConfig struct
+├── logger_models.cpp      # from_json(LogConfig)
+├── logger_factory.h       # LoggerFactory 声明
+├── logger_factory.cpp     # create() → new SpdlogLogger(config)
+├── logger_macros.h        # LOG_INFO(module, fmt, ...) printf 宏
+└── imp/
+    ├── spdlog_logger.h    # SpdlogLogger 声明
+    └── spdlog_logger.cpp  # 实现：sink 创建、log 分发、生命周期
+```
+
+### common 模块实际文件清单（参考实现）
+
+```
+common/
+├── CMakeLists.txt
+├── module.h               # Module ABC: start/stop/health_check/name
+├── models.h               # UnifiedItem, RunStatus struct + from_json/to_json 声明
+└── models.cpp             # JSON 序列化实现
+```
+
+### config 模块实际文件清单
+
+```
+wheel/config/
+├── CMakeLists.txt
+├── config_loader.h        # ConfigLoader ABC: load()/reload()
+├── config_models.h        # Config + sub-configs (ServerConfig, LLMConfig, etc.)
+├── config_models.cpp      # from_json() for all config structs
+├── config_factory.h       # ConfigLoaderFactory 声明
+├── config_factory.cpp     # create(path?) → new JsonConfigLoader(path)
+└── imp/
+    ├── json_config_loader.h    # JsonConfigLoader 声明
+    └── json_config_loader.cpp  # 实现：文件读取 + JSON 解析 + ${ENV} 替换
+```
+
+**关键决策 — JSON 格式**：配置从 YAML 改为 JSON。文件名为 `config.json`（默认），格式与 Python `config.yaml` 等效，但使用 JSON 语法。
+
+**Config 结构**（`config_models.h`）：
+- `ServerConfig`: port (7890), auto_open_browser (true)
+- `LLMConfig`: provider, api_key, base_url, model, temperature, max_tokens, timeout
+- `BrowserConfig`: headless, slow_mo, viewport_width/height, locale, timeout
+- `PlatformConfig`: enabled, session_file, base_url, account (map<string, string>)
+- `TaskConfig`: name, platforms (vec<string>), intent, schedule ("manual")
+- `Config`: 聚合以上所有字段
+
+**`${ENV_VAR}` 替换**：`resolve_env_vars(nlohmann::json&)` 是公开的自由函数（在 `imp/json_config_loader.h` 中声明），递归遍历 JSON 树，对所有字符串值执行 `${VAR}` ⇒ `getenv(VAR)` 替换。若环境变量未设置或为空，抛出 `std::runtime_error`。
+
+**ConfigLoader ABC**（不继承 Module）：
+```cpp
+class ConfigLoader {
+public:
+    virtual Config load() = 0;
+    virtual Config reload() = 0;      // 重新读取文件
+    virtual ~ConfigLoader() = default;
+};
+```
+
+**JsonConfigLoader 行为**：
+- 文件不存在 → 返回全默认 `Config{}`
+- 文件为空 → 返回全默认 `Config{}`
+- 文件内容为 `null` → 返回全默认 `Config{}`
+- 部分字段 → 缺失字段保留默认值
+- `reload()` = `load()`（重新读取文件）
+- `config()` 访问器返回上次 load 的结果
+- **同步文件 I/O**（`std::ifstream`），不需要 scheduler
+
+**测试文件**：
+- `test_config_models_ut.cpp`：结构体默认值、from_json、env var 替换、工厂
+- `test_config_loader_ta.cpp`：文件加载、reload、env 替换、工厂文件集成
+common/
+├── CMakeLists.txt
+├── module.h               # Module ABC: start/stop/health_check/name
+├── models.h               # UnifiedItem, RunStatus struct + from_json/to_json 声明
+└── models.cpp             # JSON 序列化实现
 
 ---
 
@@ -417,36 +626,118 @@ public:
 
 ## 8. 测试规范
 
-| 类型 | 对应 Python | C++ GTest |
-|------|-----------|-----------|
-| UT | 单类/函数，纯内存 | `TEST(Suite, Case)` 或 `TEST_F` |
-| TA | 单模块全链路 | `TEST_F` + `std::filesystem::temp_directory_path()` |
+### 文件命名
 
-**文件镜像**：
+每个模块两个测试文件：
+
 ```
-tests/wheel/config/test_config_loader.cpp   ← 原 test_config_loader.py
-tests/wheel/storage/test_jsonl_storage.cpp  ← 原 test_storage.py
+tests/{module}/
+├── test_{module}_ut.cpp    # UT — 纯内存，默认值、序列化、枚举
+└── test_{module}_ta.cpp    # TA — 全链路，factory→impl→round-trip
 ```
 
-**示例**：
+| 类型 | C++ 框架 | 构建宏 | 特点 |
+|------|---------|--------|------|
+| UT | **gtest** | `add_lynne_test` | 无 I/O，`TEST(Suite, Case)`，链接 `gtest gtest_main` |
+| TA | **standalone** | `add_lynne_ta` | 有 I/O，自定义 `main()`，不依赖 gtest，手动 pass/fail 计数 |
+
+### UT 模式（gtest，以 LogConfig 为例）
+
 ```cpp
+#include "wheel/logger/logger_models.h"
+#include "wheel/logger/logger.h"
 #include <gtest/gtest.h>
-#include "src/wheel/config/imp/json_config_loader.h"
 
-TEST(ConfigLoaderTest, LoadsDefaultsForMissingFile) {
-    JsonConfigLoader loader("nonexistent.json");
-    Config cfg;
-    bool done = false;
-    loader.load(
-        [&](Config c) { cfg = std::move(c); done = true; },
-        [&](const std::string&) { FAIL() << "should not fail"; done = true; }
-    );
-    // 注：如果 ConfigLoader 改为异步回调，此处需要事件循环支持
-    EXPECT_EQ(cfg.server.port, 7890);
+using namespace lynne::wheel;
+
+TEST(LogConfigDefaults, AllFieldsHaveSaneDefaults) {
+    LogConfig c{};
+    EXPECT_EQ(c.level, "INFO");
+    EXPECT_EQ(c.log_file, "data/lynne.log");
+}
+
+TEST(LogConfigJson, FromJsonMinimal) {
+    auto j = nlohmann::json::parse("{}");
+    LogConfig c;
+    from_json(j, c);
+    EXPECT_EQ(c.level, "INFO");  // default survived
+}
+
+TEST(LogConfigJson, PartialOverride) {
+    auto j = nlohmann::json::parse(R"({"level":"ERROR"})");
+    LogConfig c;
+    from_json(j, c);
+    EXPECT_EQ(c.level, "ERROR");
+    EXPECT_EQ(c.log_file, "data/lynne.log");  // default
 }
 ```
 
-> 注：对于纯数据模块（config、storage），`load()` 在启动阶段可保持同步以简化测试。
+要点：
+- `using namespace lynne::wheel;` or `lynne::common;` 简化命名空间
+- 测试默认值、最小 JSON、部分覆盖、全字段 JSON
+- 枚举类型单独测试值互异
+
+### TA 模式（standalone，以 SpdlogLogger 为例）
+
+TA 是**自带 `main()` 的可执行程序**，不依赖 gtest。用 `printf` 输出 pass/fail，返回非零退出码表示失败，仍注册在 ctest 中。
+
+```cpp
+#include "wheel/logger/logger.h"
+#include "wheel/logger/logger_factory.h"
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <filesystem>
+
+namespace fs = std::filesystem;
+using namespace lynne::wheel;
+
+static int passed = 0;
+static int failed = 0;
+
+#define CHECK(cond, msg) \
+    do { if (cond) { printf("  [PASS] %s\n", msg); ++passed; } \
+         else { printf("  [FAIL] %s\n", msg); ++failed; } \
+    } while (0)
+
+int main() {
+    fs::path tmp_dir = fs::temp_directory_path() / "lynne_test_logger";
+    fs::create_directories(tmp_dir);
+
+    std::string log_path = (tmp_dir / "test.log").string();
+    LogConfig cfg;
+    cfg.log_file = log_path;
+    cfg.level = "DEBUG";
+
+    LoggerFactory factory;
+    Logger* logger = factory.create(cfg);
+
+    logger->start();
+    logger->log(LogLevel::Info, "[test] hello world");
+    logger->log(LogLevel::Error, "[test] error");
+    logger->stop();
+
+    std::ifstream f(log_path);
+    std::string content(
+        (std::istreambuf_iterator<char>(f)),
+        std::istreambuf_iterator<char>());
+    CHECK(content.find("[test] hello world") != std::string::npos, "log contains hello");
+    CHECK(content.find("[test] error") != std::string::npos, "log contains error");
+
+    delete logger;
+    fs::remove_all(tmp_dir);
+
+    printf("\n== %d/%d passed ==\n", passed, passed + failed);
+    return failed > 0 ? 1 : 0;
+}
+```
+
+要点：
+- 没有 `SetUp/TearDown` — 所有资源在局部作用域内手动管理
+- `fs::remove_all(tmp_dir)` 在 `return` 前清理
+- `return failed > 0 ? 1 : 0` — ctest 通过退出码判断 pass/fail
+- 仍用 `add_test(NAME ... COMMAND ...)` 注册到 ctest
+- TA 源文件的 include 路径不含 `${GTEST_INCLUDE_DIR}`（`add_lynne_ta` 不引入 gtest）
 
 ---
 
@@ -463,76 +754,57 @@ TEST(ConfigLoaderTest, LoadsDefaultsForMissingFile) {
 
 ---
 
-## 10. 项目目录结构（完整）
+## 10. 项目目录结构（实际）
 
 ```
 lynne-cpp/
 ├── CMakeLists.txt
-├── config.json
-├── data/
+├── build-deps.sh            # 一键编译依赖（third_party → dist）
+├── build.sh                 # 一键编译项目（cmake build + test）
+├── dist/                    # 依赖产出物（build-deps.sh 生成）
+│   ├── include/             # json.hpp, httplib.h, spdlog/, uv.h, ixwebsocket/
+│   └── lib/                 # libuv.a, libixwebsocket.a
 ├── src/
 │   ├── CMakeLists.txt
-│   ├── main.cpp
+│   ├── main.cpp                                 # [待实现]
 │   ├── common/
-│   │   ├── module.h
-│   │   └── models.h
+│   │   ├── CMakeLists.txt
+│   │   ├── module.h        # Module ABC
+│   │   ├── models.h        # UnifiedItem, RunStatus
+│   │   └── models.cpp      # JSON 序列化
 │   ├── wheel/
-│   │   ├── config/
+│   │   ├── config/          ✅ 已实现
+│   │   │   ├── CMakeLists.txt
 │   │   │   ├── config_loader.h
-│   │   │   ├── config_models.h
-│   │   │   ├── config_factory.h
-│   │   │   ├── config_factory.cpp
-│   │   │   └── imp/
-│   │   │       ├── json_config_loader.h
-│   │   │       └── json_config_loader.cpp
-│   │   ├── logger/
-│   │   │   ├── logger.h
-│   │   │   └── logger.cpp
-│   │   ├── storage/
-│   │   │   ├── storage.h
-│   │   │   ├── storage_models.h
-│   │   │   ├── storage_factory.h / .cpp
-│   │   │   └── imp/
-│   │   │       ├── jsonl_storage.h
-│   │   │       └── jsonl_storage.cpp
-│   │   ├── scheduler/
-│   │   │   ├── scheduler.h
-│   │   │   ├── scheduler_models.h
-│   │   │   ├── scheduler_factory.h / .cpp
-│   │   │   └── imp/
-│   │   │       ├── uv_scheduler.h
-│   │   │       └── uv_scheduler.cpp
-│   │   ├── llm/
-│   │   │   ├── llm_engine.h
-│   │   │   ├── llm_models.h
-│   │   │   ├── llm_factory.h / .cpp
-│   │   │   └── imp/
-│   │   │       ├── deepseek_engine.h
-│   │   │       └── deepseek_engine.cpp
-│   │   └── browser/
-│   │       ├── browser_manager.h
-│   │       ├── browser_models.h
-│   │       ├── browser_factory.h / .cpp
-│   │       └── imp/
-│   │           ├── cdp_browser_manager.h
-│   │           └── cdp_browser_manager.cpp
-│   └── core/
+│   │   │   ├── config_models.h / .cpp
+│   │   │   ├── config_factory.h / .cpp
+│   │   │   └── imp/json_config_loader.h / .cpp
+│   │   ├── logger/          ✅ 已实现
+│   │   │   ├── CMakeLists.txt
+│   │   │   ├── logger.h / logger_models.h / .cpp
+│   │   │   ├── logger_factory.h / .cpp
+│   │   │   ├── logger_macros.h
+│   │   │   └── imp/spdlog_logger.h / .cpp
+│   │   ├── storage/                             # [待实现]
+│   │   ├── scheduler/                           # [待实现]
+│   │   ├── llm/                                 # [待实现]
+│   │   └── browser/                             # [待实现]
+│   └── core/                                    # [待实现]
 │       ├── adapters/
-│       │   ├── base_adapter.h
-│       │   ├── adapter_models.h
-│       │   ├── adapter_factory.h / .cpp
-│       │   └── imp/
-│       │       ├── llm_adapter.h / .cpp
-│       │       └── rednote_adapter.h / .cpp
 │       └── agent/
-│           ├── agent.h / .cpp
-│           ├── agent_models.h
-│           └── tools.h / .cpp
 ├── tests/
 │   ├── CMakeLists.txt
-│   ├── wheel/config/test_config_loader.cpp
-│   └── ...
+│   ├── common/
+│   │   ├── CMakeLists.txt
+│   │   ├── test_models_ut.cpp    ✅
+│   │   └── test_models_ta.cpp    ✅
+│   └── wheel/
+│       └── logger/
+│           ├── CMakeLists.txt
+│           ├── test_logger_ut.cpp ✅
+│           └── test_logger_ta.cpp ✅
 └── third_party/
+    ├── CMakeLists.txt          # 依赖编译定义
     ├── nlohmann/json.hpp
     ├── spdlog/
     ├── libuv/
@@ -543,4 +815,43 @@ lynne-cpp/
 
 ---
 
-*Skill 版本：v0.1 | 最后更新：2026-04-26*
+## 11. 已知陷阱 & 解决方案
+
+### spdlog `from_str()` 大小写敏感
+
+`spdlog::level::from_str("INFO")` 返回 `off`(6)，不是 `info`(2)。
+只有小写字符串才能正确解析。
+
+**解决**：在传给 `from_str` 前转小写：
+
+```cpp
+#include <cctype>
+auto level_str = config_.level;  // "INFO"
+for (auto& c : level_str) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+auto level = spdlog::level::from_str(level_str);  // 正确得到 info
+```
+
+### spdlog `log()` 不出输出
+
+如果日志配置了但文件/控制台无输出，检查：
+1. **level 值**：`from_str` 返回了 off 吗？打印 `static_cast<int>(level)` 验证
+2. **flush**：`stop()` 前调用 `logger->flush()` 或析构前保证 spdlog::drop 触发 flush
+3. **sink**：文件 sink 创建是否抛异常被静默吞掉（不要空 catch）
+
+### json.hpp 是扁平安装的
+
+`dist/include/json.hpp`（不是 `dist/include/nlohmann/json.hpp`）：
+```cpp
+#include <json.hpp>           // 正确
+// #include <nlohmann/json.hpp> // 错误！找不到
+```
+
+### GTest 从源码编译
+
+googletest **不要**装到 dist/，直接 `add_subdirectory(third_party/googletest)`，且必须设置 `set(BUILD_TESTING OFF CACHE BOOL "" FORCE)` 避免 gtest 自己的测试被触发。
+
+googletest 的 `internal_utils.cmake` 强制把输出路径设为 `${CMAKE_BINARY_DIR}/lib`，需要通过 `set_target_properties` 覆盖为 `${DIST_DIR}/lib`，否则 gtest 的 .a 不会进入 `dist/lib/`。
+
+---
+
+*Skill 版本：v0.2 | 最后更新：2026-04-27*

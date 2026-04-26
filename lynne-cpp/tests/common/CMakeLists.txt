@@ -1,0 +1,5 @@
+add_lynne_test(test_models_ut test_models_ut.cpp)
+target_link_libraries(test_models_ut lynne_common)
+
+add_lynne_ta(test_models_ta test_models_ta.cpp)
+target_link_libraries(test_models_ta lynne_common)

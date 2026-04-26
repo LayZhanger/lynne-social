@@ -1,0 +1,5 @@
+add_lynne_test(test_config_models_ut test_config_models_ut.cpp)
+target_link_libraries(test_config_models_ut lynne_config)
+
+add_lynne_ta(test_config_loader_ta test_config_loader_ta.cpp)
+target_link_libraries(test_config_loader_ta lynne_config)

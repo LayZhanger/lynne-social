@@ -1,0 +1,5 @@
+add_lynne_test(test_logger_ut test_logger_ut.cpp)
+target_link_libraries(test_logger_ut lynne_common lynne_logger)
+
+add_lynne_ta(test_logger_ta test_logger_ta.cpp)
+target_link_libraries(test_logger_ta lynne_common lynne_logger)
