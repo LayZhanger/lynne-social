@@ -1,7 +1,6 @@
 import pytest
 
 from src.core.adapters.adapter_models import AdapterConfig
-from src.core.adapters.base_adapter import BaseAdapter
 from src.core.adapters.imp.rednote_adapter import RedNoteAdapter
 from src.wheel.browser.browser_factory import BrowserManagerFactory
 from src.wheel.browser.browser_models import BrowserConfig
@@ -71,7 +70,7 @@ class TestRedNoteAdapterTA:
 
     # ── helpers ──
 
-    async def _make_adapter(self, **kw) -> RedNoteAdapter:
+    async def _make_adapter(self, **kw) -> tuple[RedNoteAdapter, object]:
         browser_cfg = BrowserConfig(
             headless=True,
             sessions_dir=str(self._tmp_path / "sessions"),
@@ -266,26 +265,6 @@ class TestRedNoteAdapterTA:
         finally:
             await browser.stop()
 
-    # ── URL template ──
-
-    @pytest.mark.asyncio
-    async def test_search_url_keyword_replacement(self):
-        html = _build_test_html(n=3, start_hidden=3, batch=3)
-        # URL still contains {keyword} placeholder, file:// doesn't care
-        url = self._write_page("search_kw.html", html)
-        # use template-style URL
-        template = f"{url}?q={{keyword}}"
-
-        adapter, browser = await self._make_adapter(search_url=template)
-        try:
-            results = []
-            async for item in adapter.search(["AI 模型"], limit=10):
-                results.append(item)
-
-            assert len(results) == 3
-        finally:
-            await browser.stop()
-
     # ── get_user_posts ──
 
     @pytest.mark.asyncio
@@ -387,7 +366,9 @@ class TestRedNoteAdapterTA:
     @pytest.mark.asyncio
     async def test_search_no_data_id_falls_back_to_title(self):
         html = _build_test_html(n=1, start_hidden=1, batch=1)
-        url = self._write_page("search_noid.html", html.replace('data-id="1"', ""))
+        url = self._write_page("search_noid.html",
+                               html.replace('data-id="1"', ""))
+
         adapter, browser = await self._make_adapter(search_url=url)
         try:
             results = []

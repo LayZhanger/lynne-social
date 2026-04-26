@@ -64,6 +64,12 @@ class TestPlatformConfigUT:
         assert cfg.enabled is False
         assert cfg.session_file == ""
         assert cfg.base_url == ""
+        assert cfg.account == {}
+
+    def test_with_account(self):
+        cfg = PlatformConfig(account={"phone": "13800138000"})
+        assert cfg.account == {"phone": "13800138000"}
+        assert cfg.account["phone"] == "13800138000"
 
 
 class TestTaskConfigUT:

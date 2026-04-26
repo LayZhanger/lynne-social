@@ -29,6 +29,7 @@ class PlatformConfig(BaseModel):
     enabled: bool = False
     session_file: str = ""
     base_url: str = ""
+    account: dict[str, str] = Field(default_factory=dict)
 
 
 class TaskConfig(BaseModel):

@@ -1,6 +1,6 @@
-# Lynne 总体设计方案 v4.1
+# Lynne 总体设计方案 v4.2
 
-> **v4.1 核心变更**：LLM 从"处理工具"提升为"决策中枢"（Agent 模式），Orchestrator 删除。Adapter 提取策略从硬编码 CSS 改为 LLM 驱动（DOM 骨架 → 生成 JS extractPosts），CSS 作为 fallback。
+> **v4.2 核心变更**：引入 `LLMAdapter` 中间父类，统一 LLM 提取逻辑。LLMConfig 从 Config 逐层透传（YamlConfigLoader → main.py → AdapterFactory → LLMAdapter），LLMAdapter 内部自建 LLMEngine。工厂只传配置不创建 Engine。
 
 ---
 
@@ -218,46 +218,81 @@ Step 2:
 ### M4. PlatformAdapter
 
 ```
-职责：平台数据采集。v4.1 起不再硬编码 CSS 选择器，改为 LLM 驱动的自适应提取。
+职责：平台数据采集。v4.2 引入 LLMAdapter 中间层，所有平台适配器通过它复用 LLM 驱动的自适应提取。
 
-抽象基类（接口不变）：
-  class BaseAdapter(ABC):
-      platform_name: str
+类层次：
+  BaseAdapter(ABC)                     ← 接口不变
+    └─ LLMAdapter(BaseAdapter, ABC)    ← 中间层（v4.2 新增）
+         ├─ 管理 LLMEngine 生命周期（从传入的 LLMConfig 懒创建）
+         ├─ _get_or_generate_extract_fn() 通用逻辑
+         ├─ _scroll_and_extract() 通用滚动 + 提取循环
+         ├─ 缓存（URL host + path → JS extract function）
+         │
+         ├─→ RedNoteAdapter(LLMAdapter)    ← 平台 shell
+         └─→ (未来) TwitterAdapter         ← 平台 shell
 
-      async def search(keywords: list[str], limit: int) -> AsyncIterator[UnifiedItem]: ...
-      async def get_user_posts(user_id: str, limit: int) -> AsyncIterator[UnifiedItem]: ...
-      async def get_trending(limit: int) -> AsyncIterator[UnifiedItem]: ...
-      def extract(data: dict) -> UnifiedItem: ...
-      async def health_check() -> bool: ...
+Config 传递链（Config → Engine，单向）：
+  config.yaml
+    → YamlConfigLoader.load()  ← 唯一读文件的地方
+      → Config.llm  (Pydantic)
+        → main.py: LLMConfig dataclass 转换
+          → AdapterFactory.create(browser, adapter_config, llm_config=llm_config)
+            → RedNoteAdapter(browser, config, llm_config=...)
 
-提取策略（v4.1 新增）：
-  Adapter 不写死 CSS 选择器。分两条路径：
+关键规则：
+  - 只有 YamlConfigLoader 读 config.yaml
+  - AdapterFactory 无状态，零依赖注入 —— create(browser, config, *, llm_config)
+  - LLMAdapter 内部使用 LLMEngineFactory 自建 engine（懒初始化）
+  - llm_config=None 时不创建 LLM → 走 CSS 回退路径
 
-  ┌─ LLM 路径（推荐）─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐
+提取策略：
+  ┌─ LLM 路径（llm_config 不为 None）─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐
   │  page 加载                                                      │
-  │    → 通用 DOM walker 提取前 N 个帖子的结构骨架（tag + cls + txt） │
-  │    → LLM 分析骨架，生成 JS 提取函数                               │
-  │    → page.evaluate(函数) 批量提取全部帖子                         │
-  │    → 缓存（按 URL host + path），后续翻页/同页面零 LLM 调用       │
-  └─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+  │    → 通用 _SKELETON_JS 提取前 N 个帖子的结构骨架                  │
+  │    → LLMAdapter._ensure_llm() 懒启动 DeepSeekEngine              │
+  │    → LLM 分析骨架，生成 JS extractPosts() 函数                    │
+  │    → page.evaluate(extractPosts) 批量提取                         │
+  │    → 缓存（按 URL host + path），后续翻页零 LLM 调用              │
+  └─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
 
-  ┌─ CSS 回退路径（无 LLM 或 LLM 生成失败时）─ ─ ─ ─ ─ ┐
-  │  硬编码 CSS 选择器（当前 _NOTE_ITEM 等），行为不变          │
-  └─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+  ┌─ CSS 回退路径（llm_config=None 或 LLM 生成失败）─ ─ ─ ─ ─ ┐
+  │  硬编码 CSS 选择器（_NOTE_ITEM 等），行为不变                       │
+  └─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
 
-依赖变化：
-  Adapter 可选依赖 LLMEngine（llm_engine=None 时走 CSS 路径）。
+依赖关系：
+  LLMAdapter → BrowserManager + LLMEngine  (core → wheel，单向，通过 LLMConfig 注入)
 
-  依赖关系：Adapter → BrowserManager + [LLMEngine]  (core → wheel，单向)
-
-已实现：RedNoteAdapter（CSS 路径 + 骨架提取 JS 已就绪，LLM 路径待 LLMEngine 完成后接入）
+已实现：RedNoteAdapter（CSS 路径完整）
+进行中：LLMAdapter + RedNoteAdapter LLM 提取接入
 待实现：TwitterAdapter（GraphQL API 拦截）
 ```
 
-#### M4a. 提取协议
+#### M4a. LLMAdapter 实现细节（v4.2）
 
 ```
-三层数据格式：
+LLMAdapter 是所有平台适配器的中间父类，封装 LLM 驱动的自适应内容提取。
+继承 BaseAdapter（接口不变），被 RedNoteAdapter 等平台 shell 继承。
+
+文件：src/core/adapters/imp/llm_adapter.py
+
+核心属性：
+  self._browser        BrowserManager    ← 注入
+  self._config         AdapterConfig     ← 注入
+  self._llm_config     LLMConfig | None  ← 注入（注意：不是 LLMEngine！）
+  self._llm            LLMEngine | None  ← _ensure_llm() 懒创建
+  self._extract_fn_cache  dict[str, str] ← URL pattern → JS extract function
+
+懒初始化：
+  async def _ensure_llm(self):
+      if self._llm is None and self._llm_config is not None:
+          from src.wheel.llm.llm_factory import LLMEngineFactory
+          self._llm = LLMEngineFactory().create(self._llm_config)
+          await self._llm.start()
+  
+  llm_config 由 AdapterFactory 透传（来自 main.py → Config.llm）。
+  llm_config=None 时 _ensure_llm() 不创建 Engine → 自动走 CSS 回退。
+
+LLM 提取协议：
 
 [1] 输入：页面骨架 (page.evaluate → dict)
    通用 DOM walker（不依赖平台选择器）遍历 DOM，找包含子文本、链接、图片的容器节点。
@@ -506,13 +541,13 @@ Agent                           LLMEngine       Tool(search)      Tool(storage)
 
 ---
 
-## 8. 模块依赖关系（v4.1）
+## 8. 模块依赖关系（v4.2）
 
 ```
                          ┌──────────┐
                          │  Config  │
                          └────┬─────┘
-                              │
+                              │ LLMConfig 逐层透传
         ┌─────────────────────┼─────────────────────┐
         │                     │                     │
         ▼                     ▼                     ▼
@@ -526,18 +561,26 @@ Agent                           LLMEngine       Tool(search)      Tool(storage)
 │                        wheel                             │
 │                                                          │
 │  LLMEngine ◄─────── BrowserManager    Scheduler          │
-│     ▲                                                   │
-│     └──── Adapter 也可调用 LLMEngine（提取）              │
+│     ▲          LLMAdapter._ensure_llm() 懒创建 engine     │
+│     └──── LLMConfig 经 AdapterFactory 透传（不创建）      │
 │                                                          │
 │  FileStorage  Logger             Config                  │
 └──────────────────────────────────────────────────────────┘
 ```
 
 **依赖方向**：`core → wheel`（单向，不可逆）。
+
+**工厂规则（硬）**：工厂是纯分发器，不持有、不创建任何运行时依赖。实现的依赖由实现自身内部创建（如 `LLMAdapter._ensure_llm()` 懒创建 `LLMEngine`），或由 `main.py` 直接传入实现构造器。工厂只在 import 层面接触 `imp/`。
   - `Agent → wheel`（调 LLMEngine/Storage/Adapter）
-  - `Adapter → wheel`（BrowserManager + 可选 LLMEngine）
+  - `LLMAdapter → LLMEngine`（通过 LLMEngineFactory 自建，LLMConfig 来自 main.py）
   - `API → Agent`（封装 HTTP 请求）
   - `Scheduler` 是通用定时回调器，不含 Agent import，绑定在 `main.py` 完成。
+
+**Config 传递规则**：
+  - 唯一读文件：`YamlConfigLoader`
+  - 构建 LLMConfig：`main.py`（唯一 Composition Root）
+  - 透传：`AdapterFactory`（只传不建 Engine）
+  - 自建 Engine：`LLMAdapter._ensure_llm()`（从 LLMConfig 懒创建）
 
 ---
 
@@ -546,7 +589,7 @@ Agent                           LLMEngine       Tool(search)      Tool(storage)
 | 阶段 | 内容 | 说明 |
 |------|------|------|
 | 1 | **LLMEngine 实现** | `src/wheel/llm/imp/deepseek_engine.py` — DeepSeekEngine（stdlib urllib + scheduler） ✅ |
-| 2 | **Adapter LLM 提取接入** | `RedNoteAdapter` + 骨架提取 JS + LLM 生成 JS extractPosts |
+| 2 | **LLMAdapter + 提取接入** | `src/core/adapters/imp/llm_adapter.py` — 中间父类；RedNoteAdapter 继承 LLMAdapter |
 | 3 | **Agent 实现** | `src/core/agent/imp/react_agent.py`，ReAct 循环 |
 | 4 | **Tool 具体实现** | SearchTool / StorageTool / ReportTool |
 | 5 | **Scheduler 实现** | `src/wheel/scheduler/imp/apscheduler_impl.py`，通用定时回调器 |
@@ -567,4 +610,4 @@ Agent                           LLMEngine       Tool(search)      Tool(storage)
 
 ---
 
-*文档版本：v4.1 | 最后更新：2026-04-26*
+*文档版本：v4.2 | 最后更新：2026-04-26*

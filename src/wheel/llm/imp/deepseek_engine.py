@@ -62,7 +62,7 @@ class DeepSeekEngine(LLMEngine):
                 raw = resp.read().decode("utf-8")
                 data = json.loads(raw)
                 self._log.info("chat response ← status={} body={}",
-                               resp.status, raw[:500])
+                               getattr(resp, "status", "?"), raw[:500])
         except urllib.error.HTTPError as e:
             body_text = ""
             try:

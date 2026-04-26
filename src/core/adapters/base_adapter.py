@@ -21,3 +21,6 @@ class BaseAdapter(ABC):
 
     @abstractmethod
     async def health_check(self) -> bool: ...
+
+    async def login(self) -> None:
+        pass

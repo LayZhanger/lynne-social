@@ -8,7 +8,7 @@ Early development (v0.2.0). `src/core/` (business layer) and `src/main.py` (Comp
 
 - **Layering**: `core → wheel → common` (one-way only, never reverse)
 - **Dependency inversion**: every module has ABC interface + factory + models + `imp/` implementation. No file outside `main.py` may import from `imp/`. Modules depend on interfaces only.
-- **Factory pattern**: all wiring happens via factories. Factories with dependencies receive them via `__init__` injection. `main.py` is the sole Composition Root.
+- **Factory pattern**: factories are pure dispatchers — they map config to impl class. Factories do NOT hold or create runtime dependencies (BrowserManager, LLMEngine, etc.). Impl classes create their own sub-dependencies internally (via their own factories, lazy init). `main.py` is the sole Composition Root.
 - **Module ABC**: all long-lived modules inherit `Module(ABC)` (`start`, `stop`, `health_check`, `name`).
 
 ## Thread model (hard rules)

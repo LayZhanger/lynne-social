@@ -70,7 +70,7 @@ browser = PlaywrightBrowserManager(...)
 
 ---
 
-## 4. 工厂模式
+## 4. 工厂模式（工厂不持有依赖）
 
 基类 (`common/factory.py`):
 
@@ -80,19 +80,37 @@ class Factory(ABC, Generic[T]):
     def create(self, config: object) -> T: ...
 ```
 
-有依赖模块的工厂通过 **构造函数** 注入：
+**硬规则**：工厂是纯分发器，不持有、不创建任何运行时依赖。
+
+```
+工厂只做一件事：config → 选择实现类 → new 返回。
+实现的依赖（BrowserManager、LLMEngine、Scheduler 等）由实现自身内部创建，
+或由 main.py 直接传给实现构造器，不经过工厂。
+```
 
 ```python
-class OrchestratorFactory(Factory[Orchestrator]):
-    def __init__(
-        self,
-        browser_factory: Factory[BrowserManager],
-        llm_factory: Factory[LLMEngine],
-        storage_factory: Factory[Storage],
-    ):
-        self._browser_factory = browser_factory
-        ...
+# ✅ 正确：工厂零依赖，纯分发
+class AdapterFactory:
+    def create(self, browser, config, *, llm_config=None) -> BaseAdapter:
+        if config.platform == "rednote":
+            return RedNoteAdapter(browser, config, llm_config=llm_config)
+        raise ValueError(...)
+
+# ✅ 正确：实现内部自建子依赖
+class LLMAdapter(BaseAdapter):
+    def __init__(self, ..., llm_config=None):
+        self._llm_config = llm_config  # 存配置，不建 engine
+
+    async def _ensure_llm(self):
+        self._llm = LLMEngineFactory().create(self._llm_config)  # 父类自建
+
+# ❌ 禁止：工厂持有依赖
+class AdapterFactory(Factory[BaseAdapter]):
+    def __init__(self, browser_factory: Factory[BrowserManager], browser_config):
+        self._browser_factory = browser_factory  # ❌ 工厂不应持 browser
 ```
+
+**工厂可以 import 实现文件**（这是它存在的目的——把 platform 映射到具体类）。除此以外的代码禁止跨层 import `imp/`。
 
 ---
 

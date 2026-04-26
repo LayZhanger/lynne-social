@@ -20,6 +20,9 @@ platforms:
     enabled: true
     session_file: "data/sessions/rednote_state.json"
     base_url: "https://www.xiaohongshu.com"
+    account:
+      phone: "${REDNOTE_PHONE}"
+      password: "${REDNOTE_PASSWORD}"
   douyin:
     enabled: false
     session_file: "data/sessions/douyin_state.json"

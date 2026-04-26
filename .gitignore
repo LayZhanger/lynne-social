@@ -34,4 +34,4 @@ build/
 Thumbs.db
 
 # Data (runtime generated, may contain secrets)
-data/sessions/*.json
+data/
