@@ -471,7 +471,7 @@ int main() {
 | 8 | adapters | 730 | core/adapters | 700 | ★★★★ | browser |
 | 9 | agent | 40 | core/agent | 80 | ★★ | adapters |
 
-> **已实现**：common + logger + config（含 UT/TA 测试，编译通过）
+> **已实现**：common + logger + config + storage + scheduler（含 UT/TA 测试，编译通过）
 > **推荐顺序**：common → logger → config → storage → scheduler → llm → browser → adapters → agent
 
 **每个模块的 C++ 文件布局**（镜像原 Python）：
@@ -565,11 +565,106 @@ public:
 **测试文件**：
 - `test_config_models_ut.cpp`：结构体默认值、from_json、env var 替换、工厂
 - `test_config_loader_ta.cpp`：文件加载、reload、env 替换、工厂文件集成
-common/
+
+### storage 模块实际文件清单
+
+```
+wheel/storage/
 ├── CMakeLists.txt
-├── module.h               # Module ABC: start/stop/health_check/name
-├── models.h               # UnifiedItem, RunStatus struct + from_json/to_json 声明
-└── models.cpp             # JSON 序列化实现
+├── storage.h               # Storage ABC : public Module
+├── storage_models.h        # StorageConfig struct
+├── storage_models.cpp      # from_json(StorageConfig)
+├── storage_factory.h       # StorageFactory 声明
+├── storage_factory.cpp     # create()/create(path)/create(config) → new JsonlStorage
+└── imp/
+    ├── jsonl_storage.h     # JsonlStorage 声明
+    └── jsonl_storage.cpp   # 实现：JSONL 文件读写、report/md、summary/json、日期管理
+```
+
+**Storage ABC**（继承 Module）：
+```cpp
+class Storage : public common::Module {
+    virtual void save_items(items, date) = 0;
+    virtual vector<UnifiedItem> load_items(date, platform?) = 0;
+    virtual void save_report(markdown, date) = 0;
+    virtual string load_report(date) = 0;
+    virtual void save_summary(json, date) = 0;
+    virtual json load_summary(date) = 0;
+    virtual vector<string> list_dates() = 0;
+};
+```
+
+**目录结构**（`data_dir/YYYY-MM-DD/`）：
+```
+data/2026-01-01/items.jsonl    # 每条 UnifiedItem 一行 JSON
+data/2026-01-01/report.md       # Markdown 报告
+data/2026-01-01/summary.json    # 摘要 JSON
+data/2026-01-02/...
+```
+
+**JsonlStorage 行为**：
+- `start()` — 创建 data_dir 目录
+- `save_items()` — 追加写（`ios::app`），每行 `to_json(item).dump()`
+- `load_items()` — 逐行解析 JSONL，可选按 `platform` 过滤
+- `save_report()` — 覆盖写 markdown 文件
+- `load_report()` — 文件不存在返回空字符串
+- `save_summary()` — `dump(2)` 缩进 JSON
+- `load_summary()` — 文件不存在返回 null JSON
+- `list_dates()` — 降序排列日期目录，排除 `sessions/`
+- **同步文件 I/O**（`std::ifstream`/`std::ofstream`），不需要 scheduler
+
+**测试文件**：
+- `test_storage_ut.cpp`：StorageConfig 默认值、from_json、工厂三种创建方式
+- `test_storage_ta.cpp`：全生命周期（start→save→load→round-trip）、platform 过滤、追加、report 覆盖、summary、list_dates 排序与 sessions 排除、多日期隔离、LLM 字段序列化
+
+### scheduler 模块实际文件清单
+
+```
+wheel/scheduler/
+├── CMakeLists.txt
+├── scheduler.h               # Scheduler ABC : public Module
+├── scheduler_models.h        # SchedulerConfig struct
+├── scheduler_models.cpp      # from_json(SchedulerConfig)
+├── scheduler_factory.h       # SchedulerFactory 声明
+├── scheduler_factory.cpp     # create(loop, config) → new UvScheduler
+└── imp/
+    ├── uv_scheduler.h        # UvScheduler 声明
+    └── uv_scheduler.cpp      # 实现：uv_queue_work / uv_timer / uv_async_send
+```
+
+**Scheduler ABC**（继承 Module）：
+```cpp
+class Scheduler : public common::Module {
+    virtual void run_blocking(work, on_done) = 0;
+    virtual void post(callback) = 0;
+    virtual void add_job(name, interval_ms, callback) = 0;
+    virtual void remove_job(name) = 0;
+};
+```
+
+**libuv 映射**：
+| 接口 | libuv 原语 | 调用方 |
+|------|-----------|--------|
+| `run_blocking(work, on_done)` | `uv_queue_work` | storage、llm、browser |
+| `post(callback)` | `uv_async_send` | browser（IXWebSocket→loop） |
+| `add_job(name, interval_ms, cb)` | `uv_timer_start` | agent（定时爬取） |
+| `remove_job(name)` | `uv_timer_stop` + `uv_close` | agent |
+
+**UvScheduler 实现要点**：
+- Factory 需要 `uv_loop_t*`（由 `main.cpp` Composition Root 创建传入），不持有 loop 所有权
+- `start()` — 初始化 async handle（ref'd，保持 loop 存活）
+- `stop()` — 停止所有 timer + 关闭 async handle
+- `run_blocking` — 分配 `WorkCtx` + `uv_work_t`，`work` 在线程池执行，`on_done` 回 loop 线程
+- `add_job` — 重复定时器（`uv_timer_start(repeat)`），同名覆盖写入旧 handle
+- `remove_job` — `uv_timer_stop` + `uv_close`，close callback 中释放 `TimerCtx`
+- `post` — `std::mutex` 保护队列，`uv_async_send` 唤醒 loop，`drain_post_queue` 串行执行
+- **所有用户回调都包在 try/catch 中** — 异常不崩溃 scheduler
+
+**测试文件**：
+- `test_scheduler_ut.cpp`：SchedulerConfig 默认值、from_json、Factory（需要 libuv loop）
+- `test_scheduler_ta.cpp`：全生命周期（name/health/start/stop）、run_blocking 线程池执行、post 回调、add_job 一次性/重复/多 job 独立/异常安全、factory 集成、析构清理
+
+### common 模块实际文件清单（参考实现）
 
 ---
 
@@ -785,8 +880,8 @@ lynne-cpp/
 │   │   │   ├── logger_factory.h / .cpp
 │   │   │   ├── logger_macros.h
 │   │   │   └── imp/spdlog_logger.h / .cpp
-│   │   ├── storage/                             # [待实现]
-│   │   ├── scheduler/                           # [待实现]
+│   │   ├── storage/         ✅ 已实现
+│   │   ├── scheduler/       ✅ 已实现
 │   │   ├── llm/                                 # [待实现]
 │   │   └── browser/                             # [待实现]
 │   └── core/                                    # [待实现]

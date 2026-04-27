@@ -1,0 +1,5 @@
+add_lynne_test(test_scheduler_ut test_scheduler_ut.cpp)
+target_link_libraries(test_scheduler_ut lynne_common lynne_scheduler)
+
+add_lynne_ta(test_scheduler_ta test_scheduler_ta.cpp)
+target_link_libraries(test_scheduler_ta lynne_common lynne_scheduler)

@@ -1,3 +1,5 @@
 add_subdirectory(common)
 add_subdirectory(wheel/logger)
 add_subdirectory(wheel/config)
+add_subdirectory(wheel/storage)
+add_subdirectory(wheel/scheduler)
