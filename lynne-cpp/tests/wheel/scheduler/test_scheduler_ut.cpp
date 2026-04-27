@@ -4,7 +4,6 @@
 #include "wheel/scheduler/imp/uv_scheduler.h"
 
 #include <gtest/gtest.h>
-#include <uv.h>
 
 using namespace lynne::wheel;
 
@@ -49,28 +48,18 @@ TEST(SchedulerConfigJson, FromJsonCustom) {
 // ============================================================
 
 TEST(SchedulerFactory, CreateWithConfig) {
-    uv_loop_t loop;
-    uv_loop_init(&loop);
-
     SchedulerFactory factory;
     SchedulerConfig cfg{"UTC", 1};
-    auto* s = factory.create(&loop, cfg);
+    auto* s = factory.create(cfg);
     ASSERT_NE(s, nullptr);
     EXPECT_EQ(s->name(), "UvScheduler");
     delete s;
-
-    uv_loop_close(&loop);
 }
 
 TEST(SchedulerFactory, CreateDefault) {
-    uv_loop_t loop;
-    uv_loop_init(&loop);
-
     SchedulerFactory factory;
-    auto* s = factory.create(&loop);
+    auto* s = factory.create();
     ASSERT_NE(s, nullptr);
     EXPECT_EQ(s->name(), "UvScheduler");
     delete s;
-
-    uv_loop_close(&loop);
 }

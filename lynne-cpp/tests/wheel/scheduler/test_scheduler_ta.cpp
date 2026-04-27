@@ -8,6 +8,7 @@
 #include <uv.h>
 #include <thread>
 #include <chrono>
+#include <stdexcept>
 
 using namespace lynne::wheel;
 
@@ -31,16 +32,9 @@ static void report(const char* suite) {
     printf("--- %s: %d/%d ---\n", suite, passed, passed + failed);
 }
 
-static uv_loop_t* make_loop() {
-    auto* loop = new uv_loop_t;
-    uv_loop_init(loop);
-    return loop;
-}
-
-static void cleanup_loop(uv_loop_t* loop) {
-    uv_run(loop, UV_RUN_NOWAIT);
-    uv_loop_close(loop);
-    delete loop;
+// pump pending close callbacks on the default loop
+static void drain() {
+    uv_run(uv_default_loop(), UV_RUN_NOWAIT);
 }
 
 int main() {
@@ -48,9 +42,8 @@ int main() {
     // Lifecycle: name, health_check, start, stop
     // ============================================================
     {
-        auto* loop = make_loop();
         SchedulerFactory factory;
-        Scheduler* s = factory.create(loop);
+        Scheduler* s = factory.create();
 
         CHECK(s->name() == std::string("UvScheduler"), "name = UvScheduler");
         CHECK_FALSE(s->health_check(), "health_check false before start");
@@ -62,15 +55,17 @@ int main() {
         CHECK_TRUE(s->health_check(), "health_check after double start");
 
         s->stop();
+        drain();
         CHECK_FALSE(s->health_check(), "health_check false after stop");
 
-        Scheduler* s2 = factory.create(loop);
+        Scheduler* s2 = factory.create();
         s2->stop();
+        drain();
         CHECK_FALSE(s2->health_check(), "health_check after stop without start");
 
         delete s;
         delete s2;
-        cleanup_loop(loop);
+        drain();
     }
     report("Lifecycle");
 
@@ -78,9 +73,8 @@ int main() {
     // run_blocking — works on thread pool, on_done on loop, then stop
     // ============================================================
     {
-        auto* loop = make_loop();
         SchedulerFactory factory;
-        Scheduler* s = factory.create(loop);
+        Scheduler* s = factory.create();
         s->start();
 
         int work_result = 0;
@@ -91,13 +85,14 @@ int main() {
             [&, s]() { done = true; s->stop(); }
         );
 
-        uv_run(loop, UV_RUN_DEFAULT);
+        uv_run(uv_default_loop(), UV_RUN_DEFAULT);
+        drain();
 
         CHECK_TRUE(done, "run_blocking: on_done called");
         check_int(work_result, 42, "run_blocking: work result = 42");
 
         delete s;
-        cleanup_loop(loop);
+        drain();
     }
     report("RunBlocking");
 
@@ -105,24 +100,23 @@ int main() {
     // post — callback enqueued and processed on loop
     // ============================================================
     {
-        auto* loop = make_loop();
         SchedulerFactory factory;
-        Scheduler* s = factory.create(loop);
+        Scheduler* s = factory.create();
         s->start();
 
         bool called = false;
 
         s->post([&]() { called = true; });
 
-        // Use UV_RUN_ONCE — processes one event (the async callback) then returns
-        uv_run(loop, UV_RUN_ONCE);
+        uv_run(uv_default_loop(), UV_RUN_ONCE);
 
         CHECK_TRUE(called, "post: callback executed");
         CHECK_TRUE(s->health_check(), "post: scheduler still alive");
 
         s->stop();
+        drain();
         delete s;
-        cleanup_loop(loop);
+        drain();
     }
     report("Post");
 
@@ -130,9 +124,8 @@ int main() {
     // add_job — self-removing one-shot timer
     // ============================================================
     {
-        auto* loop = make_loop();
         SchedulerFactory factory;
-        Scheduler* s = factory.create(loop);
+        Scheduler* s = factory.create();
         s->start();
 
         int fires = 0;
@@ -142,12 +135,13 @@ int main() {
             s->stop();
         });
 
-        uv_run(loop, UV_RUN_DEFAULT);
+        uv_run(uv_default_loop(), UV_RUN_DEFAULT);
+        drain();
 
         check_int(fires, 1, "add_job: timer fired exactly once");
 
         delete s;
-        cleanup_loop(loop);
+        drain();
     }
     report("AddJobOnce");
 
@@ -155,9 +149,8 @@ int main() {
     // add_job — repeating timer, external stop after 50ms
     // ============================================================
     {
-        auto* loop = make_loop();
         SchedulerFactory factory;
-        Scheduler* s = factory.create(loop);
+        Scheduler* s = factory.create();
         s->start();
 
         int fires = 0;
@@ -166,16 +159,17 @@ int main() {
         auto start = std::chrono::steady_clock::now();
         while (std::chrono::duration_cast<std::chrono::milliseconds>(
                    std::chrono::steady_clock::now() - start).count() < 50) {
-            uv_run(loop, UV_RUN_NOWAIT);
+            uv_run(uv_default_loop(), UV_RUN_NOWAIT);
         }
 
         s->remove_job("rep");
         s->stop();
+        drain();
 
         CHECK_TRUE(fires >= 2, "add_job: repeating timer fired >= 2 times");
 
         delete s;
-        cleanup_loop(loop);
+        drain();
     }
     report("AddJobRepeat");
 
@@ -183,17 +177,17 @@ int main() {
     // remove_job — nonexistent name is safe
     // ============================================================
     {
-        auto* loop = make_loop();
         SchedulerFactory factory;
-        Scheduler* s = factory.create(loop);
+        Scheduler* s = factory.create();
         s->start();
 
         s->remove_job("no-such");
         CHECK_TRUE(s->health_check(), "remove nonexistent: no crash");
 
         s->stop();
+        drain();
         delete s;
-        cleanup_loop(loop);
+        drain();
     }
     report("RemoveNonexistent");
 
@@ -201,9 +195,8 @@ int main() {
     // add_job — overwriting same name
     // ============================================================
     {
-        auto* loop = make_loop();
         SchedulerFactory factory;
-        Scheduler* s = factory.create(loop);
+        Scheduler* s = factory.create();
         s->start();
 
         int a_fires = 0;
@@ -212,13 +205,14 @@ int main() {
         s->add_job("same", 10000, [&]() { a_fires++; });
         s->add_job("same", 1, [&, s]() { b_fires++; s->remove_job("same"); s->stop(); });
 
-        uv_run(loop, UV_RUN_DEFAULT);
+        uv_run(uv_default_loop(), UV_RUN_DEFAULT);
+        drain();
 
         check_int(a_fires, 0, "overwrite: old callback not called");
         check_int(b_fires, 1, "overwrite: new callback called");
 
         delete s;
-        cleanup_loop(loop);
+        drain();
     }
     report("AddJobOverwrite");
 
@@ -226,9 +220,8 @@ int main() {
     // Multiple jobs independent
     // ============================================================
     {
-        auto* loop = make_loop();
         SchedulerFactory factory;
-        Scheduler* s = factory.create(loop);
+        Scheduler* s = factory.create();
         s->start();
 
         int a = 0, b = 0;
@@ -238,18 +231,19 @@ int main() {
         auto start = std::chrono::steady_clock::now();
         while (std::chrono::duration_cast<std::chrono::milliseconds>(
                    std::chrono::steady_clock::now() - start).count() < 30) {
-            uv_run(loop, UV_RUN_NOWAIT);
+            uv_run(uv_default_loop(), UV_RUN_NOWAIT);
         }
 
         s->remove_job("a");
         s->remove_job("b");
         s->stop();
+        drain();
 
         CHECK_TRUE(a >= 10, "multi-job: timer A fired >= 10 times");
         CHECK_TRUE(b >= 5, "multi-job: timer B fired >= 5 times");
 
         delete s;
-        cleanup_loop(loop);
+        drain();
     }
     report("MultiJob");
 
@@ -257,9 +251,8 @@ int main() {
     // Callback exception does not crash scheduler
     // ============================================================
     {
-        auto* loop = make_loop();
         SchedulerFactory factory;
-        Scheduler* s = factory.create(loop);
+        Scheduler* s = factory.create();
         s->start();
 
         int good_fires = 0;
@@ -270,12 +263,13 @@ int main() {
 
         s->post([]() { throw std::runtime_error("expected"); });
 
-        uv_run(loop, UV_RUN_DEFAULT);
+        uv_run(uv_default_loop(), UV_RUN_DEFAULT);
+        drain();
 
         CHECK_TRUE(good_fires >= 5, "exception: good timer still fired");
 
         delete s;
-        cleanup_loop(loop);
+        drain();
     }
     report("CallbackException");
 
@@ -283,10 +277,9 @@ int main() {
     // Factory — full lifecycle
     // ============================================================
     {
-        auto* loop = make_loop();
         SchedulerFactory factory;
         SchedulerConfig cfg{"UTC", 1};
-        Scheduler* s = factory.create(loop, cfg);
+        Scheduler* s = factory.create(cfg);
 
         CHECK(s->name() == std::string("UvScheduler"), "factory: correct name");
         CHECK_FALSE(s->health_check(), "factory: not started");
@@ -295,10 +288,11 @@ int main() {
         CHECK_TRUE(s->health_check(), "factory: started");
 
         s->stop();
+        drain();
         CHECK_FALSE(s->health_check(), "factory: stopped");
 
         delete s;
-        cleanup_loop(loop);
+        drain();
     }
     report("Factory");
 
@@ -306,16 +300,14 @@ int main() {
     // Destructor calls stop safely with active jobs
     // ============================================================
     {
-        auto* loop = make_loop();
         {
             SchedulerFactory factory;
-            Scheduler* s = factory.create(loop);
+            Scheduler* s = factory.create();
             s->start();
             s->add_job("t", 1000, []() {});
             delete s;
         }
-        uv_run(loop, UV_RUN_NOWAIT);
-        cleanup_loop(loop);
+        drain();
     }
     report("DestructorSafe");
 

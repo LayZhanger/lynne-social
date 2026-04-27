@@ -4,12 +4,12 @@
 namespace lynne {
 namespace wheel {
 
-Scheduler* SchedulerFactory::create(uv_loop_t* loop, const SchedulerConfig& config) const {
-    return new UvScheduler(loop, config);
+Scheduler* SchedulerFactory::create(const SchedulerConfig& config) const {
+    return new UvScheduler(config);
 }
 
-Scheduler* SchedulerFactory::create(uv_loop_t* loop) const {
-    return new UvScheduler(loop, SchedulerConfig{});
+Scheduler* SchedulerFactory::create() const {
+    return new UvScheduler(SchedulerConfig{});
 }
 
 } // namespace wheel

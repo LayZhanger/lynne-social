@@ -415,7 +415,7 @@ int main() {
     auto* loop = uv_default_loop();
 
     // 初始化所有模块，注册到 loop
-    auto scheduler = UvSchedulerFactory().create(loop, nullptr);
+    auto scheduler = SchedulerFactory().create(scheduler_cfg);
     auto browser   = CdpBrowserManagerFactory().create(loop, browser_cfg);
     // ...
 
@@ -651,10 +651,11 @@ class Scheduler : public common::Module {
 | `remove_job(name)` | `uv_timer_stop` + `uv_close` | agent |
 
 **UvScheduler 实现要点**：
-- Factory 需要 `uv_loop_t*`（由 `main.cpp` Composition Root 创建传入），不持有 loop 所有权
+- **自己持有 `uv_default_loop()`** — 构造函数只接收 `SchedulerConfig`，不暴露 libuv 类型
+- Factory 输入：`create()` / `create(config)`，无 `uv_loop_t*` — 所有其他工厂一致
 - `start()` — 初始化 async handle（ref'd，保持 loop 存活）
 - `stop()` — 停止所有 timer + 关闭 async handle
-- `run_blocking` — 分配 `WorkCtx` + `uv_work_t`，`work` 在线程池执行，`on_done` 回 loop 线程
+- `run_blocking` — 分配 `WorkCtx` + `uv_work_t`，`uv_queue_work(uv_default_loop(), ...)`
 - `add_job` — 重复定时器（`uv_timer_start(repeat)`），同名覆盖写入旧 handle
 - `remove_job` — `uv_timer_stop` + `uv_close`，close callback 中释放 `TimerCtx`
 - `post` — `std::mutex` 保护队列，`uv_async_send` 唤醒 loop，`drain_post_queue` 串行执行

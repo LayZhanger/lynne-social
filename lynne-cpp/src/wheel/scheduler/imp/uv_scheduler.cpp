@@ -3,8 +3,8 @@
 namespace lynne {
 namespace wheel {
 
-UvScheduler::UvScheduler(uv_loop_t* loop, const SchedulerConfig& config)
-    : loop_(loop), config_(config) {}
+UvScheduler::UvScheduler(const SchedulerConfig& config)
+    : config_(config) {}
 
 UvScheduler::~UvScheduler() {
     stop();
@@ -17,7 +17,7 @@ std::string UvScheduler::name() const {
 void UvScheduler::start() {
     if (started_) return;
 
-    uv_async_init(loop_, &async_handle_, async_cb);
+    uv_async_init(uv_default_loop(), &async_handle_, async_cb);
     async_handle_.data = this;
     async_inited_ = true;
     started_ = true;
@@ -51,7 +51,7 @@ void UvScheduler::run_blocking(
     auto* req = new uv_work_t;
     auto* ctx = new WorkCtx{std::move(work), std::move(on_done)};
     req->data = ctx;
-    uv_queue_work(loop_, req, work_cb, after_work_cb);
+    uv_queue_work(uv_default_loop(), req, work_cb, after_work_cb);
 }
 
 void UvScheduler::post(std::function<void()> callback) {
@@ -70,7 +70,7 @@ void UvScheduler::add_job(
     remove_job(name);
 
     auto* ctx = new TimerCtx{name, std::move(callback), &timers_, {}};
-    uv_timer_init(loop_, &ctx->handle);
+    uv_timer_init(uv_default_loop(), &ctx->handle);
     ctx->handle.data = ctx;
 
     auto* named_ctx = ctx;

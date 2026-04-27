@@ -14,7 +14,7 @@ namespace wheel {
 
 class UvScheduler : public Scheduler {
 public:
-    UvScheduler(uv_loop_t* loop, const SchedulerConfig& config);
+    explicit UvScheduler(const SchedulerConfig& config);
     ~UvScheduler() override;
 
     std::string name() const override;
@@ -55,7 +55,6 @@ private:
     static void timer_cb(uv_timer_t* handle);
     static void timer_close_cb(uv_handle_t* handle);
 
-    uv_loop_t* loop_;
     SchedulerConfig config_;
     bool started_ = false;
 
