@@ -1,0 +1,5 @@
+add_lynne_test(test_storage_ut test_storage_ut.cpp)
+target_link_libraries(test_storage_ut lynne_common lynne_storage)
+
+add_lynne_ta(test_storage_ta test_storage_ta.cpp)
+target_link_libraries(test_storage_ta lynne_common lynne_storage)
