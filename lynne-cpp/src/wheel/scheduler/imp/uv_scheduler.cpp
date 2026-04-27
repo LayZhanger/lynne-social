@@ -90,6 +90,14 @@ void UvScheduler::remove_job(const std::string& name) {
     }
 }
 
+void UvScheduler::step() {
+    uv_run(uv_default_loop(), UV_RUN_NOWAIT);
+}
+
+void UvScheduler::run() {
+    uv_run(uv_default_loop(), UV_RUN_DEFAULT);
+}
+
 void UvScheduler::drain_post_queue() {
     std::vector<std::function<void()>> pending;
     {

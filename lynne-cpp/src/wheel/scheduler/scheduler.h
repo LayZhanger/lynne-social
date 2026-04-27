@@ -24,6 +24,9 @@ public:
     ) = 0;
 
     virtual void remove_job(const std::string& name) = 0;
+
+    virtual void step() = 0;
+    virtual void run() = 0;
 };
 
 } // namespace wheel

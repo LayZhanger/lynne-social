@@ -33,6 +33,8 @@ public:
         std::function<void()> callback
     ) override;
     void remove_job(const std::string& name) override;
+    void step() override;
+    void run() override;
 
 private:
     struct WorkCtx {
