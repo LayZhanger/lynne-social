@@ -28,6 +28,28 @@ cmake --build . -j$(nproc)
 echo "[3/3] Installing to dist/..."
 cmake --install .
 
+echo ""
+echo "[4/4] Building OpenSSL..."
+OPENSSL_VERSION="3.0.15"
+OPENSSL_DIR="$DEPS_DIR/openssl"
+
+if [ ! -d "$OPENSSL_DIR" ]; then
+    echo "  Downloading OpenSSL ${OPENSSL_VERSION}..."
+    cd "$DEPS_DIR"
+    curl -sL -o "openssl-${OPENSSL_VERSION}.tar.gz" \
+        "https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz"
+    tar xzf "openssl-${OPENSSL_VERSION}.tar.gz"
+    mv "openssl-${OPENSSL_VERSION}" openssl
+    rm "openssl-${OPENSSL_VERSION}.tar.gz"
+fi
+
+echo "  Configuring OpenSSL..."
+cd "$OPENSSL_DIR"
+./Configure --prefix="$DIST_DIR" --libdir=lib no-shared
+echo "  Building OpenSSL (this may take a minute)..."
+make -j$(nproc)
+make install
+
 # Cleanup build dir (optional, keep for incremental builds)
 # rm -rf "$BUILD_DIR"
 

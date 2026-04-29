@@ -68,7 +68,8 @@ description: Lynne C++ migration conventions — syntax constraints, callback as
 | 3 | `libuv` | v1.48.0 | C 源码 | `git clone --branch v1.48.0` |
 | 4 | `cpp-httplib` | v0.17.0 | 单头 | `wget` httplib.h |
 | 5 | `IXWebSocket` | v11.4.6 | 头+cp | `git clone --branch v11.4.6` |
-| 6 | `googletest` | v1.14.0 | 源码 | `git clone --branch v1.14.0` |
+| 6 | `OpenSSL` | 3.0.15 | C 源码 | `wget` tarball + `Configure` + `make` |
+| 7 | `googletest` | v1.14.0 | 源码 | `git clone --branch v1.14.0` |
 
 ```bash
 mkdir -p third_party && cd third_party
@@ -111,10 +112,13 @@ dist/
 │   ├── httplib.h             # cpp-httplib（单头）
 │   ├── spdlog/               # spdlog（header-only）
 │   ├── uv.h + uv/            # libuv 头文件
-│   └── ixwebsocket/          # IXWebSocket 头文件
+│   ├── ixwebsocket/          # IXWebSocket 头文件
+│   └── openssl/              # OpenSSL 头文件
 ├── lib/                      # 所有静态库（第三方 + 项目）
-│   ├── libuv.a / .so         # libuv（build-deps.sh 产出）
+│   ├── libuv.a               # libuv（build-deps.sh 产出）
 │   ├── libixwebsocket.a      # IXWebSocket（build-deps.sh 产出）
+│   ├── libssl.a              # OpenSSL（build-deps.sh 产出）
+│   ├── libcrypto.a           # OpenSSL（build-deps.sh 产出）
 │   ├── liblynne_common.a     # 项目模块（build.sh 产出）
 │   ├── liblynne_logger.a     # 项目模块（build.sh 产出）
 │   ├── libgtest.a / ...      # googletest（build.sh 产出）
@@ -466,7 +470,7 @@ int main() {
 | 3 | config | 130 | wheel/config | 150 | ★ | nlohmann/json |
 | 4 | storage | 140 | wheel/storage | 150 | ★ | nlohmann/json |
 | 5 | scheduler | 230 | wheel/scheduler | 250 | ★★★ | libuv |
-| 6 | llm | 130 | wheel/llm | 120 | ★★ | cpp-httplib + libuv |
+| 6 | llm | 130 | wheel/llm | 120 | ★★ | cpp-httplib + libuv + OpenSSL |
 | 7 | browser | 220 | wheel/browser | 600 | ★★★★★ | IXWebSocket + libuv |
 | 8 | adapters | 730 | core/adapters | 700 | ★★★★ | browser |
 | 9 | agent | 40 | core/agent | 80 | ★★ | adapters |
@@ -859,7 +863,7 @@ lynne-cpp/
 ├── build.sh                 # 一键编译项目（cmake build + test）
 ├── dist/                    # 依赖产出物（build-deps.sh 生成）
 │   ├── include/             # json.hpp, httplib.h, spdlog/, uv.h, ixwebsocket/
-│   └── lib/                 # libuv.a, libixwebsocket.a
+│   └── lib/                 # libuv.a, libixwebsocket.a, libssl.a, libcrypto.a
 ├── src/
 │   ├── CMakeLists.txt
 │   ├── main.cpp                                 # [待实现]
