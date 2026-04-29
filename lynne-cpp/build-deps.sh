@@ -30,17 +30,13 @@ cmake --install .
 
 echo ""
 echo "[4/4] Building OpenSSL..."
-OPENSSL_VERSION="3.0.15"
 OPENSSL_DIR="$DEPS_DIR/openssl"
 
 if [ ! -d "$OPENSSL_DIR" ]; then
-    echo "  Downloading OpenSSL ${OPENSSL_VERSION}..."
-    cd "$DEPS_DIR"
-    curl -sL -o "openssl-${OPENSSL_VERSION}.tar.gz" \
-        "https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz"
-    tar xzf "openssl-${OPENSSL_VERSION}.tar.gz"
-    mv "openssl-${OPENSSL_VERSION}" openssl
-    rm "openssl-${OPENSSL_VERSION}.tar.gz"
+    echo "  ERROR: OpenSSL source not found at $OPENSSL_DIR"
+    echo "  Please place OpenSSL 3.0.15 source in third_party/openssl/"
+    echo "  Download: https://www.openssl.org/source/openssl-3.0.15.tar.gz"
+    exit 1
 fi
 
 echo "  Configuring OpenSSL..."
