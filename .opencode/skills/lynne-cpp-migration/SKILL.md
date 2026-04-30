@@ -475,7 +475,7 @@ int main() {
 | 8 | adapters | 730 | core/adapters | 700 | ★★★★ | browser |
 | 9 | agent | 40 | core/agent | 80 | ★★ | adapters |
 
-> **已实现**：common + logger + config + storage + scheduler（含 UT/TA 测试，编译通过）
+> **已实现**：common + logger + config + storage + scheduler + llm（含 UT/TA 测试，编译通过）
 > **推荐顺序**：common → logger → config → storage → scheduler → llm → browser → adapters → agent
 
 **每个模块的 C++ 文件布局**（镜像原 Python）：
@@ -668,6 +668,51 @@ class Scheduler : public common::Module {
 **测试文件**：
 - `test_scheduler_ut.cpp`：SchedulerConfig 默认值、from_json、Factory（需要 libuv loop）
 - `test_scheduler_ta.cpp`：全生命周期（name/health/start/stop）、run_blocking 线程池执行、post 回调、add_job 一次性/重复/多 job 独立/异常安全、factory 集成、析构清理
+
+### llm 模块实际文件清单
+
+```
+wheel/llm/
+├── CMakeLists.txt
+├── llm_engine.h            # LLMEngine ABC : public Module
+├── llm_models.h             # LLMConfig struct
+├── llm_models.cpp           # from_json(LLMConfig)
+├── llm_factory.h            # LLMEngineFactory 声明
+├── llm_factory.cpp          # create(config) → new DeepSeekEngine, 校验 api_key
+└── imp/
+    ├── deepseek_engine.h    # DeepSeekEngine 声明
+    └── deepseek_engine.cpp  # 实现：httplib::SSLClient + run_blocking
+```
+
+**LLMEngine ABC**（继承 Module）：
+```cpp
+class LLMEngine : public common::Module {
+    virtual void chat(
+        const nlohmann::json& messages,
+        function<void(nlohmann::json)> on_result,
+        function<void(const string&)> on_error,
+        const nlohmann::json& tools = nullptr
+    ) = 0;
+    virtual void step() = 0;  // 驱动事件循环一轮
+    virtual void run() = 0;   // 阻塞运行，直到 stop()
+};
+```
+
+**DeepSeekEngine 实现要点**：
+- `chat()` 使用 `scheduler->run_blocking(work, on_done)`
+- work（线程池）：`httplib::SSLClient::Post()`，解析 response JSON
+- on_done（loop 线程）：分发结果到 `on_result` / `on_error`
+- URL 解析：`parse_base_url("https://host:port/path"` → `host` + `port` + `path_prefix`
+- `step()`/`run()` 代理到 `scheduler_->step()`/`run()`
+- `name()` 返回 `"llm(provider:model)"` 格式
+- Factory 校验 `api_key` 非空，否则抛 `std::runtime_error`
+- 依赖：`cpp-httplib`（header-only）+ `OpenSSL`（`libssl.a` + `libcrypto.a`）+ `scheduler`
+- CMake 需设置 `target_compile_definitions(... PUBLIC CPPHTTPLIB_OPENSSL_SUPPORT)`
+
+**TA 测试模式**：
+- 无 `DEEPSEEK_API_KEY` 环境变量 → 跳过 chat 测试（skip 不计入 fail）
+- 有 `DEEPSEEK_API_KEY` → 执行真实 API 调用（chat plain + chat with tools）
+- 始终测试：lifecycle、connection error（timeout=1s to 127.0.0.1:1）、URL 解析
 
 ### common 模块实际文件清单（参考实现）
 
@@ -887,7 +932,7 @@ lynne-cpp/
 │   │   │   └── imp/spdlog_logger.h / .cpp
 │   │   ├── storage/         ✅ 已实现
 │   │   ├── scheduler/       ✅ 已实现
-│   │   ├── llm/                                 # [待实现]
+│   │   ├── llm/             ✅ 已实现
 │   │   └── browser/                             # [待实现]
 │   └── core/                                    # [待实现]
 │       ├── adapters/

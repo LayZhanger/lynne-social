@@ -1,0 +1,8 @@
+add_lynne_test(test_llm_ut test_llm_ut.cpp)
+target_link_libraries(test_llm_ut lynne_common lynne_llm)
+
+add_lynne_ta(test_llm_ta test_llm_ta.cpp)
+target_link_libraries(test_llm_ta lynne_common lynne_llm)
+
+target_compile_definitions(test_llm_ut PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+target_compile_definitions(test_llm_ta PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
