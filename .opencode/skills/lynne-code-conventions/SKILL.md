@@ -3,9 +3,9 @@ name: lynne-code-conventions
 description: Lynne project code conventions — layering, dependency inversion, factory pattern, testing standards, file layout
 ---
 
-# Lynne 代码规范
+# Lynne C++ 代码规范
 
-> 本项目的所有代码必须遵循以下规范。
+> 本项目的所有 C++ 代码必须遵循以下规范。
 
 ---
 
@@ -28,146 +28,206 @@ src/
 
 ```
 {module}/
-├── __init__.py                 # 导出：接口 + 工厂 + 关键类型
-├── {module}.py                 # 抽象接口 (ABC)
-├── {module}_models.py          # 模块专属数据结构 (dataclass / Pydantic)
-├── {module}_factory.py         # 工厂类 XxxFactory(Factory[T])
-└── imp/                        # 具体实现目录
-    ├── __init__.py              # 空文件
-    └── {impl_name}.py          # 实现类（继承抽象接口）
+├── {module}.h                 # 抽象接口 (纯虚类)
+├── {module}_models.h          # 模块专属数据结构 (struct)
+├── {module}_models.cpp        # from_json / to_json 实现
+├── {module}_factory.h         # 工厂类声明
+├── {module}_factory.cpp       # create() 分发实现
+└── imp/
+    ├── {impl}.h               # 具体实现声明
+    └── {impl}.cpp             # 具体实现
 ```
 
 | 文件 | 内容 | 示例 |
 |------|------|------|
-| `{module}.py` | 抽象接口类（ABC） | `class Storage(ABC, Module)` |
-| `{module}_models.py` | 本模块数据结构 | `class StorageConfig(dataclass)` |
-| `{module}_factory.py` | 工厂类 | `class StorageFactory(Factory[Storage])` |
-| `imp/{impl_name}.py` | 具体实现 | `class JsonlStorage(Storage)` |
+| `{module}.h` | 抽象接口类（纯虚） | `class Storage : public Module` |
+| `{module}_models.h` | 本模块数据结构 | `struct StorageConfig` + `NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE` |
+| `{module}_factory.h` | 工厂类 | `class StorageFactory` |
+| `imp/{impl}.h/.cpp` | 具体实现 | `class JsonlStorage : public Storage` |
 
 ---
 
 ## 3. 依赖倒置原则（最重要）
 
-1. **模块之间只依赖接口（ABC），不依赖具体实现**
-2. **任何模块的代码中，不允许出现 `from ..imp import ...`**
-3. **具体实现通过工厂在 `main.py` 中注入**
+1. **模块之间只依赖接口（纯虚类），不依赖具体实现**
+2. **任何模块的代码中，不允许出现 `#include "imp/..."`**
+3. **具体实现通过工厂在 `main.cpp` 中注入**
 
-```python
-# ✅ 正确：构造参数用接口
-class DefaultOrchestrator(Orchestrator):
-    def __init__(
-        self,
-        browser: BrowserManager,     # 接口，不是 PlaywrightBrowserManager
-        llm: LLMEngine,              # 接口，不是 OpenAICompatEngine
-        storage: Storage,            # 接口，不是 JsonlStorage
-    ):
-        ...
+```cpp
+// ✅ 正确：构造参数用接口
+class DefaultAgent : public Agent {
+    DefaultAgent(
+        LLMEngine* llm,      // 接口，不是 DeepSeekEngine
+        Storage* storage,    // 接口，不是 JsonlStorage
+        Scheduler* scheduler // 接口，不是 UvScheduler
+    );
+};
 
-# ❌ 禁止：直接引用实现
-from core.browser.imp.playwright_browser_manager import PlaywrightBrowserManager
-browser = PlaywrightBrowserManager(...)
+// ❌ 禁止：直接引用实现
+#include "wheel/llm/imp/deepseek_engine.h"
+auto* llm = new DeepSeekEngine(config, scheduler);
 ```
 
 ---
 
 ## 4. 工厂模式（工厂不持有依赖）
 
-基类 (`common/factory.py`):
-
-```python
-class Factory(ABC, Generic[T]):
-    @abstractmethod
-    def create(self, config: object) -> T: ...
-```
-
 **硬规则**：工厂是纯分发器，不持有、不创建任何运行时依赖。
 
 ```
 工厂只做一件事：config → 选择实现类 → new 返回。
-实现的依赖（BrowserManager、LLMEngine、Scheduler 等）由实现自身内部创建，
-或由 main.py 直接传给实现构造器，不经过工厂。
+实现的依赖由实现自身内部创建（通过各自的工厂、懒初始化），
+或由 main.cpp 直接传入实现构造器，不经过工厂。
 ```
 
-```python
-# ✅ 正确：工厂零依赖，纯分发
-class AdapterFactory:
-    def create(self, browser, config, *, llm_config=None) -> BaseAdapter:
-        if config.platform == "rednote":
-            return RedNoteAdapter(browser, config, llm_config=llm_config)
-        raise ValueError(...)
+```cpp
+// ✅ 正确：工厂零依赖，纯分发
+class AdapterFactory {
+    BaseAdapter* create(const AdapterConfig& config);
+};
 
-# ✅ 正确：实现内部自建子依赖
-class LLMAdapter(BaseAdapter):
-    def __init__(self, ..., llm_config=None):
-        self._llm_config = llm_config  # 存配置，不建 engine
+// ✅ 正确：实现内部自建子依赖
+class LLMAdapter : public BaseAdapter {
+    LLMConfig config_;
+    LLMEngine* llm_ = nullptr;
 
-    async def _ensure_llm(self):
-        self._llm = LLMEngineFactory().create(self._llm_config)  # 父类自建
+    void ensure_llm() {
+        if (!llm_) {
+            LLMFactory factory;
+            llm_ = factory.create(config_);
+            llm_->start();
+        }
+    }
+};
 
-# ❌ 禁止：工厂持有依赖
-class AdapterFactory(Factory[BaseAdapter]):
-    def __init__(self, browser_factory: Factory[BrowserManager], browser_config):
-        self._browser_factory = browser_factory  # ❌ 工厂不应持 browser
+// ❌ 禁止：工厂持有依赖或创建资源
+class AdapterFactory {
+    BrowserManager* browser_; // ❌ 工厂不应持有依赖
+};
 ```
 
-**工厂可以 import 实现文件**（这是它存在的目的——把 platform 映射到具体类）。除此以外的代码禁止跨层 import `imp/`。
+**工厂可以 include `imp/` 文件**（这是它存在的目的——把 platform 映射到具体类）。除此以外的代码禁止跨层 include `imp/`。
 
 ---
 
 ## 5. Module 基类
 
-所有需要生命周期的模块继承 `Module(ABC)`：
+所有需要生命周期的模块继承 `common::Module`：
 
-```python
-class Module(ABC):
-    @abstractmethod
-    async def start(self) -> None: ...
-    @abstractmethod
-    async def stop(self) -> None: ...
-    @abstractmethod
-    def health_check(self) -> bool: ...
-    @property
-    @abstractmethod
-    def name(self) -> str: ...
+```cpp
+class Module {
+public:
+    virtual ~Module() {}
+    virtual void start() = 0;
+    virtual void stop() = 0;
+    virtual bool health_check() = 0;
+    virtual const char* name() = 0;
+};
 ```
 
 ---
 
 ## 6. 公共数据规约
 
-`common/models.py` 定义跨模块共享的数据结构：
+`common/models.h` 定义跨模块共享的数据结构：
 - `UnifiedItem` — 跨平台统一内容
-- `TaskResult` — 任务执行结果
 - `RunStatus` — 运行状态
 
-跨模块共享的结构体必须放 `common/models.py`，不能放各自模块的 `_models.py`。
+跨模块共享的结构体必须放 `common/models.h`，不能放各自模块的 `_models.h`。
 
 ---
 
 ## 7. 启动入口职责
 
-`main.py` 是唯一的 **组合根（Composition Root）**，负责加载配置、创建工厂、组装依赖。`main.py` 是唯一可以引用具体实现和工厂的地方。
+`main.cpp` 是唯一的 **组合根（Composition Root）**，负责加载配置、创建工厂、组装依赖。`main.cpp` 是唯一可以引用具体实现和工厂的地方。
 
 ---
 
-## 8. 测试规范
+## 8. 语法约束
 
-| 缩写 | 全称 | 范围 |
+| 禁止 | 替代方案 |
+|------|---------|
+| 模板 / 泛型 | 具体类型、裸指针、标准容器 |
+| `std::future<T>` / `std::promise<T>` | `std::function<void(T)>` 回调 |
+| `std::thread` 直接创建 | `uv_queue_work` / `uv_timer_start` |
+| CRTP / concepts / SFINAE | 纯虚类 + `dynamic_cast` |
+| `std::make_shared` / `std::make_unique` 在接口中 | 裸指针 |
+
+| 允许 | 说明 |
+|------|------|
+| `std::function<void(Arg)>` | 类型擦除，非用户模板 |
+| lambda | `[&](){ ... }`, `[this](){ ... }` |
+| `std::vector<T>` / `std::map<K,V>` | 标准容器，T/V 为具体类型 |
+| `std::unique_ptr<T>` | T 为具体类 |
+| `std::recursive_mutex` | 锁 |
+| `nlohmann::json` | JSON 库 + `NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE` |
+| `#pragma once` | 头文件保护 |
+
+---
+
+## 9. 命名规范
+
+| 元素 | 规范 | 示例 |
 |------|------|------|
-| **UT** | Unit Test | 一个类/函数：默认值、序列化、校验、边界 |
-| **TA** | 单模块 E2E | 一个模块全链路：factory → impl → 全部方法 + 生命周期 |
+| 类型名 | PascalCase | `class JsonConfigLoader` |
+| 函数/方法 | snake_case | `void load(...)` |
+| 成员变量 | 尾下划线 `_` | `std::string path_;` |
+| 局部变量 | snake_case | `auto result = ...` |
+| 常量 | kPascalCase | `const char* kBaseUrl` |
+| 命名空间 | 小写 | `namespace lynne::wheel` |
+
+---
+
+## 10. 所有权
+
+| 场景 | 方式 |
+|------|------|
+| 独占所有权 | 裸指针 + Ctor 分配 / Dtor delete |
+| 工厂返回 | 裸指针，调用方负责 delete |
+| 参数传递 | 指针或 const 引用 |
+| 回调捕获 | lambda `[this]` 或按值捕获 |
+
+---
+
+## 11. 测试规范
+
+| 缩写 | 全称 | 框架 |
+|------|------|------|
+| **UT** | Unit Test | GTest (`add_lynne_test`) |
+| **TA** | 单模块 E2E | standalone (`add_lynne_ta`) |
 
 目录镜像：
 ```
-src/{module}/{module}_models.py  →  tests/{module}/test_{module}_models.py   (UT)
-src/{module}/{module}_factory.py →  tests/{module}/test_{module}_factory.py  (UT)
-src/{module}/imp/{impl}.py       →  tests/{module}/test_{module}_impl.py      (TA)
+src/{module}/{module}_models.h  →  tests/{module}/test_{module}_ut.cpp   (UT)
+src/{module}/{module}_factory.h →  tests/{module}/test_{module}_ut.cpp   (UT)
+src/{module}/imp/{impl}.h/.cpp  →  tests/{module}/test_{module}_ta.cpp   (TA)
 ```
 
 运行命令：
 ```bash
-pytest tests/ -v                                  # 全部
-pytest tests/ -v -m "not asyncio"                  # UT only
-pytest tests/ -v -m asyncio                        # TA only
-pytest tests/ -v --cov=src --cov-report=term-missing  # 带覆盖率
+./build.sh --test                           # 全部
+ctest --test-dir build --output-on-failure  # 全部
+dist/bin/test_storage_ta                    # 单个 TA
+DEEPSEEK_API_KEY="sk-xxx" dist/bin/test_llm_ta  # LLM TA（需 API key）
+```
+
+---
+
+## 12. 头文件模板
+
+```cpp
+#pragma once
+
+#include <string>
+#include <vector>
+
+namespace lynne { namespace wheel {
+
+class SomeClass {
+public:
+    virtual ~SomeClass() {}
+    virtual void do_work(std::function<void(int)> on_done) = 0;
+};
+
+}} // namespace
 ```

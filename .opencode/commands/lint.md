@@ -1,12 +1,12 @@
 ---
-description: Run ruff lint and mypy typecheck
+description: Run clang-tidy lint (manual)
 agent: build
 ---
 
-Run lint and typecheck for this Python project:
+No automated lint is configured yet. Run manually:
 
 ```bash
-.venv/bin/ruff check src/ tests/ && .venv/bin/mypy src/ tests/
+find src/ -name '*.cpp' -o -name '*.h' | xargs clang-tidy -p build/ --quiet 2>/dev/null
 ```
 
-Fix any issues found.
+Fix any warnings found. The project follows conventions in `.opencode/skills/lynne-code-conventions/SKILL.md`.

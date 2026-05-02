@@ -2,77 +2,96 @@
 
 ## Project status
 
-Early development (v0.2.0). `src/core/` (business layer) and `src/main.py` (Composition Root) are **not yet built**. `src/wheel/` modules are mostly complete (browser, config, storage, logger, scheduler), with `llm/` still skeleton.
+v0.2.0 — C++17 project. 7/11 modules implemented (common, config, logger, storage, scheduler, llm, ws_client). `src/core/` (adapters, agent, browser) and `src/main.cpp` (Composition Root) are **not yet built**.
 
 ## Architecture (hard rules)
 
-- **Layering**: `core → wheel → common` (one-way only, never reverse)
-- **Dependency inversion**: every module has ABC interface + factory + models + `imp/` implementation. No file outside `main.py` may import from `imp/`. Modules depend on interfaces only.
-- **Factory pattern**: factories are pure dispatchers — they map config to impl class. Factories do NOT hold or create runtime dependencies (BrowserManager, LLMEngine, etc.). Impl classes create their own sub-dependencies internally (via their own factories, lazy init). `main.py` is the sole Composition Root.
-- **Module ABC**: all long-lived modules inherit `Module(ABC)` (`start`, `stop`, `health_check`, `name`).
+- **Layering**: `core -> wheel -> common` (one-way only, never reverse)
+- **Dependency inversion**: every module has ABC interface (pure virtual class) + models + factory + `imp/` implementation. No file outside `main.cpp` may import from `imp/`. Modules depend on interfaces only.
+- **Factory pattern**: factories are pure dispatchers — map config to impl class. Factories hold no runtime dependencies. Impl classes create their own sub-dependencies internally (via their own factories, lazy init). `main.cpp` is the sole Composition Root.
+- **Module ABC**: all long-lived modules inherit `common::Module` (`start`, `stop`, `health_check`, `name`).
 
 ## Thread model (hard rules)
 
-- **Single asyncio event loop** for all I/O. Everything runs on it by default.
-- **`wheel/scheduler/` is the sole authorized thread pool.** No other module may import `threading`, `concurrent.futures`, `asyncio.to_thread`, or `loop.run_in_executor`.
-- **Blocking work**: if a module has unavoidable blocking work (CPU-heavy or sync library), use `scheduler.run_blocking(func, *args, **kwargs)` — never spawn your own thread. This method submits to the scheduler's semaphore-governed worker pool and returns an awaitable.
-- **All I/O must be async**: `aiofiles` / async Playwright / `httpx` / etc.
-- **Future direction**: `JsonlStorage` and `YamlConfigLoader` currently use sync file I/O — they'll be migrated to async (either native async or via `scheduler.run_blocking`) when the scheduler is wired into `main.py`.
+- **Single libuv event loop** (`uv_default_loop()`) for all I/O.
+- **`wheel/scheduler/` is the sole authorized thread pool.** No other module may create `std::thread`, `std::async`, or call `uv_queue_work` directly.
+- **Blocking work**: use `scheduler.run_blocking(work_fn, done_fn)` — submits to libuv's worker pool via `uv_queue_work`.
+- **All I/O is async**: IXWebSocket for CDP/WebSocket, `uv_timer_start` for scheduling, `uv_async_send` for cross-thread notification.
+- **No `std::future`/`std::promise`** — callback-based async only (`std::function<void(T)>`).
 
 Per-module file layout:
 ```
-{module}.py           # ABC interface
-{module}_models.py    # Pydantic/dataclass models
-{module}_factory.py   # Factory[T] subclass
-imp/{impl}.py         # concrete implementation
+{module}.h           # ABC interface
+{module}_models.h    # struct + NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE
+{module}_models.cpp  # from_json / to_json
+{module}_factory.h   # Factory subclass declaration
+{module}_factory.cpp # create() dispatcher
+imp/{impl}.h         # concrete implementation header
+imp/{impl}.cpp       # concrete implementation
 ```
 
-Reference docs: `doc/design/DESIGN.md`, `.opencode/skills/lynne-code-conventions.md`
+Reference docs: `doc/design/DESIGN.md`, `.opencode/skills/lynne-code-conventions/SKILL.md`
 
 ## Commands
 
 ```bash
-# Run all tests
-pytest tests/ -v
+# Build everything
+./build.sh
 
-# UT only (no I/O, pure memory)
-pytest tests/ -v -m "not asyncio"
+# Build & run tests
+./build.sh --test
 
-# TA only (single-module E2E with real tmp_path)
-pytest tests/ -v -m asyncio
+# Run all tests manually
+ctest --test-dir build --output-on-failure -j$(nproc)
 
-# With coverage
-pytest tests/ -v --cov=src --cov-report=term-missing
+# Run specific test binary
+dist/bin/test_storage_ta
 
-# Run a single test file/module
-pytest tests/common/ -v
-pytest tests/wheel/config/ -v
+# Run LLM TA test (needs DEEPSEEK_API_KEY)
+DEEPSEEK_API_KEY="sk-xxx" dist/bin/test_llm_ta
+
+# Build only (no test)
+cmake --build build -j$(nproc)
+
+# Full from scratch
+./build.sh --all
 ```
 
-Python venv is at `.venv`. `pytest-asyncio` is `auto` mode (see `pyproject.toml`).
+## Build system
+
+```bash
+# Step 1: compile third-party deps (one-time)
+./build-deps.sh            # -> dist/include/ dist/lib/
+
+# Step 2: configure & build project
+cmake -S . -B build
+cmake --build build -j$(nproc)   # -> build/src/ (libs) + dist/bin/ (tests)
+```
 
 ## Test conventions
 
-| Type | Scope | Covers |
-|------|-------|--------|
-| **UT** | single class/function, pure memory | defaults, serialization, validation, edge cases |
-| **TA** | one module full lifecycle | factory → impl, all public methods, round-trip consistency |
+| Type | Scope | Framework | Covers |
+|------|-------|-----------|--------|
+| **UT** | single class/function, pure memory | GTest (`add_lynne_test`) | defaults, serialization, validation, edge cases |
+| **TA** | one module full lifecycle | standalone (`add_lynne_ta`) | factory -> impl, all public methods, round-trip consistency |
 
-- Test files mirror source: `src/{module}/{file}.py` → `tests/{module}/test_{file}.py`
+- Test files mirror source: `src/{module}/{file}.h/cpp` -> `tests/{module}/test_{file}.cpp`
 - ABC interfaces and logger utilities are not tested directly
-- TA tests use `tmp_path` for file isolation; never real disk paths
-- Async tests must be marked `@pytest.mark.asyncio`
-- Shared fixtures live in `tests/conftest.py` (`sample_item`, `sample_items`, `sample_yaml_file`, `sample_yaml_content`)
-- Some config tests need `monkeypatch` to set `DEEPSEEK_API_KEY`
+- TA tests use `std::filesystem::temp_directory_path()` for file isolation
+- UT tests use `TEST(SuiteName, TestName)` with `EXPECT_EQ` etc.
+- TA tests have custom `main()` with manual pass/fail counting
+- TA tests register with ctest: `add_test(NAME ... COMMAND ...)`
+- LLM TA tests skip API calls when `DEEPSEEK_API_KEY` not set
 
 ## Config
 
-- `config.yaml` at project root; supports `${ENV_VAR}` substitution
-- The YAML loader `_resolve_env` raises `ValueError` if an env var is not set — ensure `DEEPSEEK_API_KEY` is exported before loading any config that references it
+- `config.json` at project root (JSON format, read by `JsonConfigLoader`)
+- `DEEPSEEK_API_KEY` env var fallback when `api_key` field is empty
+- `SSL_CERT_FILE` env var for custom CA cert path; auto-detected from system paths
 
 ## Lint / typecheck
 
-Ruff and mypy are used but have no explicit config files (default settings). Run them manually; no pre-commit hooks or CI currently set up.
+No explicit lint config yet. `clang-tidy` can be run manually; no pre-commit hooks or CI.
 
 ## Git
 

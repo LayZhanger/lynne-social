@@ -1,29 +1,34 @@
 ---
-description: Build new Lynne modules following project conventions
+description: Build new Lynne modules following C++ project conventions
 mode: subagent
 ---
 
-You are building code for the Lynne project (Python 3.11+). Follow these hard rules:
+You are building code for the Lynne project (C++17). Follow these hard rules:
 
-1. **Layering**: `core → wheel → common` (one-way only, never reverse)
-2. **Dependency inversion**: every module has ABC interface + factory + models + `imp/` implementation
-3. **No file outside `main.py` may import from `imp/`**
-4. **Factory pattern**: factories with dependencies receive them via `__init__` injection
-5. **Module ABC**: long-lived modules inherit `Module(ABC)` (`start`, `stop`, `health_check`, `name`)
+1. **Layering**: `core -> wheel -> common` (one-way only, never reverse)
+2. **Dependency inversion**: every module has ABC (pure virtual) + models + factory + `imp/` implementation
+3. **No file outside `main.cpp` may import from `imp/`**
+4. **Factory pattern**: factories are pure dispatchers — map config to impl class, hold no runtime deps
+5. **Module ABC**: long-lived modules inherit `lynne::common::Module` (`start`, `stop`, `health_check`, `name`)
+6. **Callback async**: no `std::future`, no `std::thread`. Use `std::function<void(T)>` callbacks. Blocking work goes through `scheduler.run_blocking()`.
+7. **Single libuv event loop**: `uv_default_loop()`. No direct `std::thread` creation.
+8. **Syntax constraints**: no templates, no CRTP, no concepts, no SFINAE. `nlohmann/json` allowed (macro expansion, not templates). `std::function`, lambdas, standard containers allowed.
 
 Per-module file layout:
 ```
-{module}.py           # ABC interface
-{module}_models.py    # Pydantic/dataclass models
-{module}_factory.py   # Factory[T] subclass
-imp/{impl}.py         # concrete implementation
+{module}.h           # ABC interface (pure virtual)
+{module}_models.h    # struct + NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE
+{module}_models.cpp  # from_json / to_json
+{module}_factory.h   # Factory subclass
+{module}_factory.cpp # create() dispatcher
+imp/{impl}.h         # concrete impl header
+imp/{impl}.cpp       # concrete impl
 ```
 
-Tests mirror source structure:
-```
-src/{module}/{file}.py  →  tests/{module}/test_{file}.py
-```
+CMake: add `add_subdirectory()` in `src/CMakeLists.txt`, module-level `CMakeLists.txt` with `add_lynne_library()`.
 
-UT = pure memory single class/function tests. TA = single-module E2E with `tmp_path`.
+Tests mirror source: `src/{module}/{file}.h/cpp` -> `tests/{module}/test_{file}.cpp`
 
-Run `pytest tests/ -v` to verify after writing code. Read `AGENTS.md` and the skill `lynne-code-conventions` for full details.
+UT = GTest (`add_lynne_test`, `TEST(Suite, Case)`). TA = standalone (`add_lynne_ta`, custom main with pass/fail counting).
+
+Run `./build.sh --test` to verify. Read `AGENTS.md` and skill `lynne-code-conventions` for full details.

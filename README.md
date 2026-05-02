@@ -8,7 +8,7 @@ Browser automation collects raw data. LLMs understand it. You read the daily rep
 
 ## What it does
 
-1. Browses Twitter, RedNote, Douyin on your behalf (Playwright + stealth)
+1. Browses Twitter, RedNote, Douyin on your behalf (CDP + stealth)
 2. Feeds collected content to LLM for filtering, summarization, and topic extraction
 3. Generates a structured daily report: "These are the 4 things you should know about today"
 4. Everything runs locally. Everything stores as plain JSONL files. No databases.
@@ -46,108 +46,114 @@ You configure topics  →  Lynne scrapes periodically  →  LLM curates  →  We
 
 | Layer | Role | Status |
 |-------|------|--------|
-| `common/` | Shared models, ABC base classes, factory pattern | Done |
-| `wheel/` | Infrastructure: config, logging, storage | Done |
-| `core/` | Business: browser, adapters, LLM, orchestrator, scheduler, API | In progress |
+| `common/` | Shared models, Module ABC | Done |
+| `wheel/` | Infrastructure: config, logger, storage, scheduler, LLM, WebSocket | Done (7 modules) |
+| `core/` | Business: browser, adapters, agent | Not yet built |
 
 **Key design decisions:**
-- Strict dependency inversion: every module exposes an ABC interface. No code imports implementations directly.
-- Factory pattern for wiring (`XxxFactory(Factory[T])`), composition root in `main.py`
-- All long-lived modules inherit `Module(ABC)` with `start()/stop()/health_check()/name`
-- JSONL file storage, one directory per date — openable with any text editor
+- Strict dependency inversion: every module exposes a pure virtual ABC interface
+- Factory pattern for wiring, composition root in `main.cpp`
+- All long-lived modules inherit `common::Module` with `start/stop/health_check/name`
+- JSONL file storage, one directory per date
+- Single libuv event loop; `wheel/scheduler/` is the sole authorized thread pool
 
 ## Current status
 
-**v0.1.0** — early development.
+**v0.2.0** — C++ port complete (7/11 modules). Core business layer in progress.
 
-| Module | Tests | Coverage |
-|--------|-------|----------|
-| `common/` — models, factory, module ABC | 13 UT | 100% |
-| `wheel/config/` — YAML config + env var substitution | 39 UT+TA | ~96% |
-| `wheel/storage/` — JSONL read/write | 23 UT+TA | ~96% |
-| **Total** | **75** | **~98%** |
-
-The `core/` business layer and Web UI are not yet built.
+| Module | Tests | Status |
+|--------|-------|--------|
+| `common/` — models, Module ABC | 2 (UT+TA) | Done |
+| `wheel/config/` — JSON config loader | 2 (UT+TA) | Done |
+| `wheel/logger/` — spdlog wrapper | 2 (UT+TA) | Done |
+| `wheel/storage/` — JSONL read/write | 2 (UT+TA) | Done |
+| `wheel/scheduler/` — libuv scheduler | 2 (UT+TA) | Done |
+| `wheel/llm/` — DeepSeek/OpenAI chat | 2 (UT+TA) | Done |
+| `wheel/ws_client/` — WebSocket client | 2 (UT+TA) | Done |
+| `wheel/browser/` — CDP browser mgr | — | Pending |
+| `core/adapters/` — platform scrapers | — | Pending |
+| `core/agent/` — ReAct orchestrator | — | Pending |
+| `main.cpp` — composition root | — | Pending |
 
 ## Quickstart
 
 ### Prerequisites
-- Python ≥ 3.11
-- [Playwright](https://playwright.dev/) browsers installed
+- CMake >= 3.16
+- C++17 compiler (GCC 9+, Clang 10+)
+- Chromium/Chrome (for CDP browser automation)
 
-### Install
-
-```bash
-git clone https://github.com/anomalyco/lynne.git
-cd lynne
-python3 -m venv .venv
-.venv/bin/pip install -e ".[claude]"
-playwright install chromium
-```
-
-### Configure
+### Build dependencies (one time)
 
 ```bash
-export DEEPSEEK_API_KEY="sk-your-key-here"
-cp config.yaml config.local.yaml   # edit as needed
+./build-deps.sh
 ```
 
-`config.yaml` supports `${ENV_VAR}` substitution for secrets.
+### Build & test
+
+```bash
+./build.sh --test
+```
+
+Or manually:
+
+```bash
+cmake -S . -B build
+cmake --build build -j$(nproc)
+ctest --test-dir build --output-on-failure -j$(nproc)
+```
 
 ### Run (once core is built)
 
 ```bash
-lynne serve      # start web UI on http://localhost:7890
-```
-
-### Run tests
-
-```bash
-.venv/bin/pip install pytest pytest-asyncio pytest-cov
-pytest tests/ -v
-pytest tests/ -v --cov=src --cov-report=term-missing
+DEEPSEEK_API_KEY="sk-your-key" ./build/lynne serve
 ```
 
 ## Config example
 
-```yaml
-server:
-  port: 7890
-
-llm:
-  provider: "deepseek"
-  api_key: "${DEEPSEEK_API_KEY}"
-  model: "deepseek-chat"
-
-tasks:
-  - name: "AI industry tracker"
-    platforms: [twitter, rednote]
-    topic: "AI model releases, research breakthroughs, startup funding"
-    schedule: "every 4 hours"
-    limit: 20
+```json
+{
+  "server": { "port": 7890 },
+  "llm": {
+    "provider": "deepseek",
+    "api_key": "",
+    "model": "deepseek-chat"
+  },
+  "tasks": [
+    {
+      "name": "AI industry tracker",
+      "platforms": ["twitter", "rednote"],
+      "intent": "AI model releases, research breakthroughs, startup funding",
+      "schedule": "every 4 hours",
+      "limit": 20
+    }
+  ]
+}
 ```
+
+API key: set via `DEEPSEEK_API_KEY` env var (fallback when `api_key` is empty).
 
 ## Project structure
 
 ```
 src/
-├── common/          # Factory[T], Module(ABC), UnifiedItem models
+├── common/          # Module ABC, UnifiedItem models
 ├── wheel/           # Infrastructure
-│   ├── config/      # ConfigLoader ABC + YAML impl
-│   ├── logger/      # loguru wrapper
-│   └── storage/     # Storage ABC + JSONL impl
+│   ├── config/      # ConfigLoader ABC + JSON impl
+│   ├── logger/      # spdlog wrapper
+│   ├── storage/     # Storage ABC + JSONL impl
+│   ├── scheduler/   # Scheduler ABC + libuv impl
+│   ├── llm/         # LLMEngine ABC + DeepSeek impl
+│   └── ws_client/   # WsClient ABC + IXWebSocket impl
 └── core/            # (in progress)
-    ├── browser/     # Playwright manager
+    ├── browser/     # CDP browser manager
     ├── adapters/    # Platform scrapers
-    ├── llm/         # LLM engine
-    ├── orchestrator/# Task orchestration
-    ├── scheduler/   # Cron scheduling
-    └── api/         # FastAPI routes
+    ├── agent/       # ReAct orchestration
+    └── api/         # HTTP server
 
 tests/               # mirrors src/, UT + TA per module
-doc/
-├── design/          # Requirements, architecture, test spec
-└── tech/            # Technical guides (pytest, etc.)
+doc/                 # Design docs, test plans
+dist/                # Build output (libs, bins, headers)
+third_party/         # External dependencies
 ```
 
 ## License
