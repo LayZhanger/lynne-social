@@ -7,6 +7,7 @@
 #include <cstring>
 #include <fstream>
 #include <sstream>
+#include <thread>
 #include <vector>
 
 #include <fcntl.h>
@@ -124,26 +125,11 @@ CdpBrowserContext::~CdpBrowserContext() = default;
 void CdpBrowserContext::navigate(const std::string& url,
     std::function<void()> on_loaded,
     std::function<void(const std::string&)> on_error) {
-    auto self = this;
-
-    // 注册一次性 Page.loadEventFired 事件监听
-    manager_->on_event(session_id_, "Page.loadEventFired",
+    manager_->send_command("Page.navigate", {{"url", url}},
         [on_loaded](const nlohmann::json&) {
             on_loaded();
-        });
-
-    // 设置超时
-    int timeout = manager_->config().timeout_ms;
-
-    // 发送 Page.navigate
-    manager_->send_command("Page.navigate", {{"url", url}},
-        [self, timeout](const nlohmann::json& result) {
-            (void)result;
-            // navigate 命令已发出，等待 loadEventFired
         },
-        [self, on_error](const std::string& err) {
-            on_error(err);
-        },
+        on_error,
         session_id_);
 }
 
@@ -228,7 +214,10 @@ void CdpBrowserContext::close(
             manager_->remove_context(platform_);
             on_done();
         },
-        on_error);
+        [on_error](const std::string& err) {
+            fprintf(stderr, "[browser] closeTarget error: %s\n", err.c_str());
+            on_error(err);
+        });
 }
 
 // ============================================================
@@ -295,97 +284,91 @@ void CdpBrowserManager::launch_chrome(std::string& out_url,
     if (port == 0) port = 9222;
     std::string port_str = std::to_string(port);
 
-    int stderr_pipe[2];
-    if (pipe(stderr_pipe) < 0) {
+    int stdout_pipe[2];
+    if (pipe(stdout_pipe) < 0) {
         out_error = "pipe() failed";
         return;
     }
 
     pid_t pid = fork();
     if (pid < 0) {
-        close(stderr_pipe[0]);
-        close(stderr_pipe[1]);
+        close(stdout_pipe[0]);
+        close(stdout_pipe[1]);
         out_error = "fork() failed";
         return;
     }
 
     if (pid == 0) {
-        // child process
-        close(stderr_pipe[0]);
-        dup2(stderr_pipe[1], STDERR_FILENO);
-        close(stderr_pipe[1]);
-
-        int devnull = open("/dev/null", O_WRONLY);
-        if (devnull >= 0) {
-            dup2(devnull, STDOUT_FILENO);
-            close(devnull);
-        }
-
-        std::string headless_flag = config_.headless ? "--headless" : "";
-        std::string debug_port = "--remote-debugging-port=" + port_str;
+        close(stdout_pipe[0]);
+        dup2(stdout_pipe[1], STDOUT_FILENO);
+        dup2(stdout_pipe[1], STDERR_FILENO);
+        close(stdout_pipe[1]);
 
         execlp(chrome.c_str(), chrome.c_str(),
-               headless_flag.c_str(),
+               "--headless",
                "--disable-gpu",
                "--no-sandbox",
                "--disable-dev-shm-usage",
-               debug_port.c_str(),
+               "--remote-allow-origins=*",
+               "--remote-debugging-address=127.0.0.1",
+               "--remote-debugging-port=0",
                nullptr);
-
-        // execlp 失败
         _exit(1);
     }
 
-    // parent
     chrome_pid_ = pid;
-    close(stderr_pipe[1]);
+    close(stdout_pipe[1]);
 
-    // 从 stderr 读取 "DevTools listening on ws://..."
     char buf[4096];
+    std::string acc;
     ssize_t n;
-    std::string accumulated;
 
     struct pollfd pfd;
-    pfd.fd = stderr_pipe[0];
+    pfd.fd = stdout_pipe[0];
     pfd.events = POLLIN;
 
-    int poll_ret = poll(&pfd, 1, 10000); // 10s timeout
-    if (poll_ret <= 0) {
-        kill(pid, SIGKILL);
-        waitpid(pid, nullptr, 0);
-        close(stderr_pipe[0]);
-        out_error = poll_ret == 0 ? "chrome launch timeout"
-                                  : "chrome launch poll error";
-        chrome_pid_ = -1;
-        return;
-    }
+    for (int tries = 0; tries < 60; ++tries) {
+        int poll_ret = poll(&pfd, 1, 500);
+        if (poll_ret < 0) break;
+        if (poll_ret == 0) continue;
 
-    n = read(stderr_pipe[0], buf, sizeof(buf) - 1);
-    if (n > 0) {
+        n = read(stdout_pipe[0], buf, sizeof(buf) - 1);
+        if (n <= 0) break;
         buf[n] = '\0';
-        accumulated.assign(buf, n);
-    }
+        acc.append(buf, n);
 
-    // 继续读取剩余数据（Chrome 可能分多次输出）
-    while ((n = read(stderr_pipe[0], buf, sizeof(buf) - 1)) > 0) {
-        buf[n] = '\0';
-        accumulated += std::string(buf, n);
+        size_t pos = acc.find("ws://");
+        if (pos != std::string::npos) {
+            auto end = acc.find_first_of(" \t\r\n", pos);
+            out_url = acc.substr(pos, end - pos);
+            break;
+        }
     }
-    close(stderr_pipe[0]);
+    close(stdout_pipe[0]);
 
-    // 解析 CDP URL
-    auto pos = accumulated.find("DevTools listening on ws://");
-    if (pos == std::string::npos) {
+    if (out_url.empty()) {
         kill(pid, SIGKILL);
         waitpid(pid, nullptr, 0);
         chrome_pid_ = -1;
-        out_error = "chrome did not output CDP URL";
+        out_error = "chrome did not output WS URL";
         return;
     }
 
-    auto ws_start = accumulated.find("ws://", pos);
-    auto ws_end = accumulated.find_first_of(" \t\r\n", ws_start);
-    out_url = accumulated.substr(ws_start, ws_end - ws_start);
+    // 从 URL 解析端口，等 HTTP 服务就绪
+    int port_from_url = 0;
+    auto col_a = out_url.find(':', 5);
+    auto col_b = out_url.find(':', col_a + 1);
+    if (col_b != std::string::npos) {
+        auto sl = out_url.find('/', col_b);
+        port_from_url = std::stoi(out_url.substr(col_b + 1, sl - col_b - 1));
+    }
+    int ready_port = port_from_url > 0 ? port_from_url : port;
+
+    for (int tries = 0; tries < 5; ++tries) {
+        auto resp = http_get("127.0.0.1", ready_port, "/json/version");
+        if (!resp.empty()) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
 }
 
 // ============================================================
@@ -447,6 +430,12 @@ void CdpBrowserManager::send_command(
     }
 
     pending_[id] = {std::move(on_ok), std::move(on_error)};
+
+    if (!ws_ready_) {
+        fprintf(stderr, "[browser] queue cmd=%s\n", method.c_str());
+        pending_commands_.push_back(msg);
+        return;
+    }
     ws_.sendText(msg.dump());
 }
 
@@ -473,39 +462,58 @@ void CdpBrowserManager::start() {
     if (started_) return;
     scheduler_->start();
 
-    std::string cdp_url;
-    std::string launch_error;
+    auto state = std::make_shared<LaunchState>();
 
     scheduler_->run_blocking(
-        [this, &cdp_url, &launch_error]() {
-            launch_chrome(cdp_url, launch_error);
+        [this, state]() {
+            fprintf(stderr, "[browser] launching Chrome...\n");
+            launch_chrome(state->url, state->error);
+            fprintf(stderr, "[browser] launch_chrome done: url='%s' err='%s'\n",
+                    state->url.c_str(), state->error.c_str());
         },
-        [this, &cdp_url, &launch_error]() {
-            if (!launch_error.empty() || cdp_url.empty()) {
-                started_ = false;
+        [this, state]() {
+            fprintf(stderr, "[browser] on_done fired: url='%s' err='%s'\n",
+                    state->url.c_str(), state->error.c_str());
+            if (!state->error.empty() || state->url.empty()) {
                 return;
             }
 
-            ws_.setUrl(cdp_url);
+            ws_.setUrl(state->url);
             ws_.disableAutomaticReconnection();
 
             auto self = this;
             ws_.setOnMessageCallback([self](const ix::WebSocketMessagePtr& msg) {
-                if (msg->type == ix::WebSocketMessageType::Message) {
+                if (msg->type == ix::WebSocketMessageType::Open) {
+                    self->scheduler_->post([self]() {
+                        self->ws_ready_ = true;
+                        for (auto& cmd : self->pending_commands_) {
+                            self->ws_.sendText(cmd.dump());
+                        }
+                        self->pending_commands_.clear();
+                        int id = self->cmd_id_++;
+                        nlohmann::json enable = {
+                            {"id", id},
+                            {"method", "Page.enable"},
+                            {"params", nlohmann::json::object()}
+                        };
+                        self->pending_[id] = {
+                            [](const nlohmann::json&) {},
+                            [](const std::string&) {}
+                        };
+                        self->ws_.sendText(enable.dump());
+                    });
+                } else if (msg->type == ix::WebSocketMessageType::Message) {
                     self->scheduler_->post([self, data = msg->str]() {
                         self->on_ws_message(data);
                     });
                 } else if (msg->type == ix::WebSocketMessageType::Error) {
+                    fprintf(stderr, "[browser] WS ERROR: %s\n",
+                            msg->errorInfo.reason.c_str());
                     self->chrome_crashed_ = true;
                 }
             });
 
             ws_.start();
-
-            // 启用 Page 域以接收 loadEventFired 等事件
-            send_command("Page.enable", {}, [](const nlohmann::json&) {},
-                [](const std::string&) {});
-
             started_ = true;
         }
     );
@@ -533,7 +541,6 @@ void CdpBrowserManager::stop() {
 bool CdpBrowserManager::health_check() {
     if (!started_) return false;
     if (chrome_crashed_) return false;
-    if (ws_.getReadyState() != ix::ReadyState::Open) return false;
     if (chrome_pid_ > 0 && kill(chrome_pid_, 0) != 0) {
         chrome_crashed_ = true;
         return false;
@@ -607,8 +614,11 @@ window.chrome = {runtime: {}};
                 on_error,
                 "");  // attachToTarget 是根级命令，无 sessionId
         },
-        on_error,
-        "");  // createTarget 是根级命令，无 sessionId
+                [this, platform, on_error](const std::string& err) {
+                    fprintf(stderr, "[browser] createTarget error: %s\n", err.c_str());
+                    on_error(err);
+                },
+                "");
 }
 
 void CdpBrowserManager::get_context(const std::string& platform,

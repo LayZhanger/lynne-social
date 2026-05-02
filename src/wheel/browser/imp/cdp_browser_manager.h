@@ -5,6 +5,7 @@
 
 #include <ixwebsocket/IXWebSocket.h>
 
+#include <atomic>
 #include <map>
 #include <memory>
 #include <string>
@@ -120,16 +121,23 @@ public:
     const BrowserConfig& config() const { return config_; }
 
 private:
+    struct LaunchState {
+        std::string url;
+        std::string error;
+    };
+
     BrowserConfig config_;
     pid_t chrome_pid_ = -1;
     ix::WebSocket ws_;
     int cmd_id_ = 0;
     bool started_ = false;
+    std::atomic<bool> ws_ready_{false};
     bool chrome_crashed_ = false;
 
     std::map<int, PendingRequest> pending_;
     std::map<std::string, EventHandler> event_handlers_;
     std::map<std::string, std::unique_ptr<CdpBrowserContext>> contexts_;
+    std::vector<nlohmann::json> pending_commands_;  // WS 未就绪时暂存
     Scheduler* scheduler_ = nullptr;
 
     std::string find_chrome();
