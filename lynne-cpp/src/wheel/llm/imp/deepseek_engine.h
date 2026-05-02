@@ -38,6 +38,7 @@ private:
         std::string body;
         std::string api_key;
         int timeout_sec = 60;
+        std::string ca_cert_path;
         nlohmann::json result;
         bool ok = false;
         std::string error;

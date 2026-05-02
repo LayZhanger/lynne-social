@@ -2,11 +2,24 @@
 #include "wheel/scheduler/scheduler_factory.h"
 
 #include <httplib.h>
+#include <cstdlib>
 
 namespace lynne {
 namespace wheel {
 
 static const char* kDefaultBaseUrl = "https://api.deepseek.com/v1";
+
+static std::string detect_ca_cert_path() {
+    auto* env = std::getenv("SSL_CERT_FILE");
+    if (env && env[0] != '\0') return env;
+    for (auto* p : {"/etc/ssl/certs/ca-certificates.crt",
+                    "/etc/pki/tls/certs/ca-bundle.crt",
+                    "/etc/ssl/cert.pem"}) {
+        auto f = fopen(p, "r");
+        if (f) { fclose(f); return p; }
+    }
+    return "";
+}
 
 DeepSeekEngine::DeepSeekEngine(const LLMConfig& config)
     : config_(config) {
@@ -71,13 +84,24 @@ void DeepSeekEngine::chat(
     ctx->port = port;
     ctx->path = path_prefix + "/chat/completions";
     ctx->body = body_str;
-    ctx->api_key = config_.api_key;
     ctx->timeout_sec = config_.timeout;
+
+    std::string api_key = config_.api_key;
+    if (api_key.empty()) {
+        auto* env = std::getenv("DEEPSEEK_API_KEY");
+        if (env) api_key = env;
+    }
+    ctx->api_key = api_key;
+
+    std::string ca_cert_path = config_.ca_cert_path;
+    if (ca_cert_path.empty()) ca_cert_path = detect_ca_cert_path();
+    ctx->ca_cert_path = ca_cert_path;
 
     scheduler_->run_blocking(
         [ctx]() {
             try {
                 httplib::SSLClient cli(ctx->host, ctx->port);
+                if (!ctx->ca_cert_path.empty()) cli.set_ca_cert_path(ctx->ca_cert_path);
                 cli.set_connection_timeout(ctx->timeout_sec, 0);
                 cli.set_read_timeout(ctx->timeout_sec, 0);
                 cli.set_write_timeout(ctx->timeout_sec, 0);

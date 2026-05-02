@@ -24,7 +24,5 @@ private:
     bool loaded_ = false;
 };
 
-void resolve_env_vars(nlohmann::json& j);
-
 } // namespace wheel
 } // namespace lynne

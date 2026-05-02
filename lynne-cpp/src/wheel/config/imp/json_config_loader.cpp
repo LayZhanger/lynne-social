@@ -1,9 +1,6 @@
 #include "wheel/config/imp/json_config_loader.h"
 
 #include <fstream>
-#include <regex>
-#include <cstdlib>
-#include <stdexcept>
 
 namespace lynne {
 namespace wheel {
@@ -47,36 +44,9 @@ Config JsonConfigLoader::parse_and_resolve(const std::string& raw) const {
         return Config{};
     }
 
-    resolve_env_vars(j);
-
     Config cfg;
     from_json(j, cfg);
     return cfg;
-}
-
-void resolve_env_vars(nlohmann::json& j) {
-    if (j.is_string()) {
-        std::string s = j.get<std::string>();
-        std::regex re(R"(\$\{(\w+)\})");
-        std::smatch match;
-        while (std::regex_search(s, match, re)) {
-            auto var_name = match[1].str();
-            auto* env_val = std::getenv(var_name.c_str());
-            if (env_val == nullptr || env_val[0] == '\0') {
-                throw std::runtime_error("Environment variable " + var_name + " not set");
-            }
-            s.replace(match.position(), match.length(), env_val);
-        }
-        j = s;
-    } else if (j.is_object()) {
-        for (auto& [key, val] : j.items()) {
-            resolve_env_vars(val);
-        }
-    } else if (j.is_array()) {
-        for (auto& el : j) {
-            resolve_env_vars(el);
-        }
-    }
 }
 
 } // namespace wheel

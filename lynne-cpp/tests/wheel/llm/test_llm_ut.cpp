@@ -20,6 +20,7 @@ TEST(LLMConfigDefaults, AllFields) {
     EXPECT_DOUBLE_EQ(c.temperature, 0.7);
     EXPECT_EQ(c.max_tokens, 4096);
     EXPECT_EQ(c.timeout, 60);
+    EXPECT_EQ(c.ca_cert_path, "");
 }
 
 TEST(LLMConfigDefaults, CustomValues) {
@@ -32,6 +33,7 @@ TEST(LLMConfigDefaults, CustomValues) {
     EXPECT_DOUBLE_EQ(c.temperature, 0.3);
     EXPECT_EQ(c.max_tokens, 1024);
     EXPECT_EQ(c.timeout, 30);
+    EXPECT_EQ(c.ca_cert_path, "");
 }
 
 // ============================================================
@@ -74,6 +76,13 @@ TEST(LLMConfigJson, PartialOverride) {
     EXPECT_EQ(c.model, "deepseek-chat");
 }
 
+TEST(LLMConfigJson, CaCertPath) {
+    auto j = nlohmann::json::parse(R"({"ca_cert_path": "/custom/ca.pem"})");
+    LLMConfig c;
+    from_json(j, c);
+    EXPECT_EQ(c.ca_cert_path, "/custom/ca.pem");
+}
+
 // ============================================================
 // LLMEngineFactory
 // ============================================================
@@ -96,9 +105,13 @@ TEST(LLMEngineFactory, CreateWithCustomModel) {
     delete engine;
 }
 
-TEST(LLMEngineFactory, CreateMissingApiKeyThrows) {
+TEST(LLMEngineFactory, CreateWithEmptyApiKey) {
+    LLMConfig cfg{};
     LLMEngineFactory factory;
-    EXPECT_THROW(factory.create(LLMConfig{}), std::runtime_error);
+    auto* engine = factory.create(cfg);
+    ASSERT_NE(engine, nullptr);
+    EXPECT_EQ(engine->name(), "llm(deepseek:deepseek-chat)");
+    delete engine;
 }
 
 // ============================================================

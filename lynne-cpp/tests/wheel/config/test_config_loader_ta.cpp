@@ -4,7 +4,7 @@
 #include "wheel/config/imp/json_config_loader.h"
 
 #include <cstdio>
-#include <cstdlib>
+
 #include <fstream>
 #include <filesystem>
 #include <string>
@@ -191,61 +191,6 @@ int main() {
     }
 
     report("ConfigAccessor");
-
-    // ============================================================
-    // Env var substitution in file
-    // ============================================================
-    {
-        ::setenv("API_KEY", "sk-secret-123", 1);
-        write_json(config_path, R"({"llm": {"api_key": "${API_KEY}"}})");
-        JsonConfigLoader loader(config_path);
-        auto cfg = loader.load();
-        check_str(cfg.llm.api_key, "sk-secret-123", "env var substitution in file");
-        ::unsetenv("API_KEY");
-    }
-
-    report("EnvVarInFile");
-
-    // ============================================================
-    // Env var in nested platform object
-    // ============================================================
-    {
-        ::setenv("TOKEN", "tk-abc", 1);
-        write_json(config_path, R"({
-            "platforms": {
-                "twitter": {
-                    "enabled": true,
-                    "session_file": "${TOKEN}"
-                }
-            }
-        })");
-        JsonConfigLoader loader(config_path);
-        auto cfg = loader.load();
-        check_str(cfg.platforms["twitter"].session_file, "tk-abc", "env var in nested platform");
-        ::unsetenv("TOKEN");
-    }
-
-    report("EnvVarNestedPlatform");
-
-    // ============================================================
-    // Env var in task array
-    // ============================================================
-    {
-        ::setenv("PLATFORM", "twitter", 1);
-        write_json(config_path, R"({
-            "tasks": [
-                {"name": "test", "platforms": ["${PLATFORM}"]}
-            ]
-        })");
-        JsonConfigLoader loader(config_path);
-        auto cfg = loader.load();
-        check_size(cfg.tasks.size(), 1u, "env in task: 1 task");
-        check_size(cfg.tasks[0].platforms.size(), 1u, "env in task: 1 platform");
-        check_str(cfg.tasks[0].platforms[0], "twitter", "env in task: platform = twitter");
-        ::unsetenv("PLATFORM");
-    }
-
-    report("EnvVarInTaskArray");
 
     // ============================================================
     // Factory loads from file

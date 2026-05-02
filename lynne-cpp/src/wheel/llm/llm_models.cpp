@@ -11,6 +11,7 @@ void from_json(const nlohmann::json& j, LLMConfig& c) {
     c.temperature = j.value("temperature", 0.7);
     c.max_tokens = j.value("max_tokens", 4096);
     c.timeout = j.value("timeout", 60);
+    c.ca_cert_path = j.value("ca_cert_path", "");
 }
 
 } // namespace wheel

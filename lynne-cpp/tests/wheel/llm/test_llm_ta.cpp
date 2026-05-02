@@ -56,18 +56,20 @@ int main() {
     report("Lifecycle");
 
     // ============================================================
-    // Factory — missing api_key throws
+    // Factory — creates with empty api_key (env fallback at runtime)
     // ============================================================
     {
-        LLMEngineFactory factory;
-        try {
-            factory.create(LLMConfig{});
-            printf("  [FAIL] factory: should throw\n");
-            ++failed;
-        } catch (const std::runtime_error& e) {
-            printf("  [PASS] factory: throws on missing api_key\n");
+        LLMConfig cfg{};
+        auto* engine = LLMEngineFactory().create(cfg);
+        bool ok = (engine != nullptr);
+        if (ok) {
+            printf("  [PASS] factory: creates with empty api_key\n");
             ++passed;
+        } else {
+            printf("  [FAIL] factory: returns null\n");
+            ++failed;
         }
+        delete engine;
     }
     report("Factory");
 
@@ -76,7 +78,7 @@ int main() {
     // ============================================================
     if (!has_api_key) {
         printf("  [SKIP] chat tests — DEEPSEEK_API_KEY not set\n");
-        skipped += 2;
+        skipped += 3;
     } else {
         // Plain chat
         {
@@ -90,15 +92,22 @@ int main() {
             nlohmann::json msgs = nlohmann::json::array();
             msgs.push_back({{"role", "user"}, {"content", "Say exactly: hello world"}});
 
+            printf("  > sending messages:\n%s\n", msgs.dump(2).c_str());
+
             engine->chat(msgs,
                 [&](nlohmann::json result) {
-                    auto content = result.value("content", "");
-                    if (content.find("hello world") != std::string::npos ||
-                        content.find("hello") != std::string::npos) {
-                        printf("  [PASS] chat: got response with 'hello'\n");
-                        ++passed;
-                    } else {
-                        printf("  [FAIL] chat: unexpected content '%s'\n", content.c_str());
+                    printf("  < received response:\n%s\n", result.dump(2).c_str());
+                    try {
+                        auto content = result["choices"][0]["message"]["content"].get<std::string>();
+                        if (content.find("hello") != std::string::npos) {
+                            printf("  [PASS] chat: got response with 'hello'\n");
+                            ++passed;
+                        } else {
+                            printf("  [FAIL] chat: unexpected content '%s'\n", content.c_str());
+                            ++failed;
+                        }
+                    } catch (...) {
+                        printf("  [FAIL] chat: unexpected response structure\n");
                         ++failed;
                     }
                     engine->stop();
@@ -119,6 +128,62 @@ int main() {
             delete engine;
         }
         report("ChatPlain");
+
+        // Plain chat (Chinese)
+        {
+            LLMConfig cfg{"deepseek", api_key};
+            cfg.timeout = 30;
+            auto* engine = LLMEngineFactory().create(cfg);
+            engine->start();
+
+            std::string err_msg;
+
+            nlohmann::json msgs = nlohmann::json::array();
+            msgs.push_back({{"role", "user"}, {"content", "请用中文回答：世界上最高的山峰是什么？"}});
+
+            printf("  > sending (Chinese):\n%s\n", msgs.dump(2).c_str());
+
+            engine->chat(msgs,
+                [&](nlohmann::json result) {
+                    printf("  < received response:\n%s\n", result.dump(2).c_str());
+                    try {
+                        auto content = result["choices"][0]["message"]["content"].get<std::string>();
+                        if (content.find("珠穆朗玛") != std::string::npos ||
+                            content.find("8848") != std::string::npos ||
+                            content.find("Everest") != std::string::npos) {
+                            printf("  [PASS] chat Chinese: got expected answer\n");
+                            ++passed;
+                        } else if (content.find("乔戈里") != std::string::npos ||
+                                   content.find("K2") != std::string::npos) {
+                            printf("  [FAIL] chat Chinese: K2 is second highest, not highest\n");
+                            ++failed;
+                        } else {
+                            printf("  [FAIL] chat Chinese: unexpected content '%s'\n",
+                                   content.substr(0, 120).c_str());
+                            ++failed;
+                        }
+                    } catch (...) {
+                        printf("  [FAIL] chat Chinese: unexpected response structure\n");
+                        ++failed;
+                    }
+                    engine->stop();
+                },
+                [&](const std::string& err) {
+                    err_msg = err;
+                    engine->stop();
+                }
+            );
+
+            engine->run();
+
+            if (!err_msg.empty()) {
+                printf("  [FAIL] chat Chinese error: %s\n", err_msg.c_str());
+                ++failed;
+            }
+
+            delete engine;
+        }
+        report("ChatChinese");
 
         // Chat with tools
         {
@@ -146,10 +211,14 @@ int main() {
             nlohmann::json msgs = nlohmann::json::array();
             msgs.push_back({{"role", "user"}, {"content", "What is the weather in Beijing?"}});
 
+            printf("  > sending messages (with tools):\n%s\n", msgs.dump(2).c_str());
+            printf("  > tools:\n%s\n", tools.dump(2).c_str());
+
             std::string err_msg;
 
             engine->chat(msgs,
                 [&](nlohmann::json result) {
+                    printf("  < received response:\n%s\n", result.dump(2).c_str());
                     if (result.contains("tool_calls")) {
                         printf("  [PASS] chat with tools: received tool_calls\n");
                         ++passed;

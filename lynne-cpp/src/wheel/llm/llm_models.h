@@ -14,6 +14,7 @@ struct LLMConfig {
     double temperature = 0.7;
     int max_tokens = 4096;
     int timeout = 60;
+    std::string ca_cert_path;
 };
 
 void from_json(const nlohmann::json& j, LLMConfig& c);

@@ -4,8 +4,7 @@
 #include "wheel/config/imp/json_config_loader.h"
 
 #include <gtest/gtest.h>
-#include <cstdlib>
-#include <stdexcept>
+
 
 using namespace lynne::wheel;
 
@@ -222,73 +221,6 @@ TEST(ConfigFromJson, ConfigFullStructure) {
     EXPECT_EQ(c.tasks[0].name, "AI动态");
     EXPECT_EQ(c.tasks[0].platforms.size(), 1u);
     EXPECT_EQ(c.tasks[0].platforms[0], "twitter");
-}
-
-// ============================================================
-// Config — env var resolution
-// ============================================================
-
-TEST(EnvResolution, PlainStringNoPlaceholder) {
-    auto j = nlohmann::json("plain_text");
-    resolve_env_vars(j);
-    EXPECT_EQ(j.get<std::string>(), "plain_text");
-}
-
-TEST(EnvResolution, SingleEnvVar) {
-    ::setenv("TEST_KEY", "test_value", 1);
-
-    auto j = nlohmann::json("prefix_${TEST_KEY}_suffix");
-    resolve_env_vars(j);
-    EXPECT_EQ(j.get<std::string>(), "prefix_test_value_suffix");
-
-    ::unsetenv("TEST_KEY");
-}
-
-TEST(EnvResolution, MissingEnvVarThrows) {
-    auto j = nlohmann::json("${MISSING_VAR}");
-    EXPECT_THROW(resolve_env_vars(j), std::runtime_error);
-}
-
-TEST(EnvResolution, EmptyEnvVarThrows) {
-    ::setenv("EMPTY_KEY", "", 1);
-
-    auto j = nlohmann::json("${EMPTY_KEY}");
-    EXPECT_THROW(resolve_env_vars(j), std::runtime_error);
-
-    ::unsetenv("EMPTY_KEY");
-}
-
-TEST(EnvResolution, RecursiveObject) {
-    ::setenv("KEY", "val", 1);
-
-    auto j = nlohmann::json::parse(R"({"a": "${KEY}", "b": {"c": "${KEY}"}})");
-    resolve_env_vars(j);
-    EXPECT_EQ(j["a"].get<std::string>(), "val");
-    EXPECT_EQ(j["b"]["c"].get<std::string>(), "val");
-
-    ::unsetenv("KEY");
-}
-
-TEST(EnvResolution, RecursiveArray) {
-    ::setenv("K", "v", 1);
-
-    auto j = nlohmann::json::parse(R"(["${K}", "plain", {"nested": "${K}"}])");
-    resolve_env_vars(j);
-    EXPECT_EQ(j[0].get<std::string>(), "v");
-    EXPECT_EQ(j[1].get<std::string>(), "plain");
-    EXPECT_EQ(j[2]["nested"].get<std::string>(), "v");
-
-    ::unsetenv("K");
-}
-
-TEST(EnvResolution, NonStringUnchanged) {
-    auto j = nlohmann::json(42);
-    resolve_env_vars(j);
-    EXPECT_EQ(j.get<int>(), 42);
-
-    auto jb = nlohmann::json(true);
-    resolve_env_vars(jb);
-    EXPECT_TRUE(jb.get<bool>());
 }
 
 // ============================================================
