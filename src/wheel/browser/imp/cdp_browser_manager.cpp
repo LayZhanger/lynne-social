@@ -468,6 +468,18 @@ void CdpBrowserManager::remove_event(const std::string& session_id,
 
 void CdpBrowserManager::start() {
     if (started_) return;
+
+    // 清理上次残留的 Chrome（前一次 stop 未执行完，或进程崩溃导致 stop 未调用）
+    if (chrome_pid_ > 0) {
+        LOG_WARN("browser", "cleaning stale chrome pid=%d", chrome_pid_);
+        kill(chrome_pid_, SIGKILL);
+        waitpid(chrome_pid_, nullptr, 0);
+        chrome_pid_ = -1;
+    }
+
+    ws_ready_ = false;
+    pending_commands_.clear();
+    chrome_crashed_ = false;
     scheduler_->start();
 
     auto state = std::make_shared<LaunchState>();
