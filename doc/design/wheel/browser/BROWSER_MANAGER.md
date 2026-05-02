@@ -60,8 +60,12 @@ public:
         std::function<void()> on_done,
         std::function<void(const std::string&)> on_error) = 0;
     virtual void restore_session(const std::string& platform,
-        std::function<void(bool restored)> on_done,
+        std::function<void(bool)> on_done,
         std::function<void(const std::string&)> on_error) = 0;
+
+    // 事件循环推进（等价于 uv_run 的 step/run）
+    virtual void step() = 0;
+    virtual void run() = 0;
 };
 ```
 
@@ -69,10 +73,12 @@ public:
 |------|------|
 | `start()` | 启动 Chrome 子进程 + 连接 CDP WebSocket |
 | `stop()` | 关闭所有 context → 断开 WS → kill 子进程 |
-| `health_check()` | 检查 Chrome 进程 + WS 连接是否正常 |
+| `health_check()` | 检查 Chrome 进程 + CDP 连接是否正常 |
 | `get_context(platform)` | 获取/创建平台隔离的浏览上下文（缓存） |
 | `save_session(platform)` | CDP `Storage.getCookies` → 写入 `{platform}_state.json` |
 | `restore_session(platform)` | 读文件 → CDP `Storage.setCookies`，无文件时 `on_done(false)` |
+| `step()` | `uv_run(UV_RUN_NOWAIT)`，推进一次事件循环 |
+| `run()` | `uv_run(UV_RUN_DEFAULT)`，阻塞直到事件循环结束 |
 
 ### 2.2 BrowserContext
 
@@ -81,7 +87,8 @@ class BrowserContext {
 public:
     virtual ~BrowserContext() = default;
 
-    // 导航到 URL，等待页面加载完成
+    // 导航到 URL。调用后 on_loaded 从 CDP 响应回调触发。
+    // CDP 在同一 session 内串行化命令，后续 evaluate 会在导航完成后执行。
     virtual void navigate(const std::string& url,
         std::function<void()> on_loaded,
         std::function<void(const std::string&)> on_error) = 0;
@@ -121,7 +128,7 @@ public:
 
 | 方法 | 语义 |
 |------|------|
-| `navigate(url)` | CDP `Page.navigate`，等 `Page.frameStoppedLoading` 后调用 `on_loaded` |
+| `navigate(url)` | CDP `Page.navigate`，`on_loaded` 从 CDP 响应回调直接触发（不等待页面事件）。CDP 在同一 session 内串行化命令，后续 `evaluate` 自动排队等导航完成 |
 | `evaluate(js)` | CDP `Runtime.evaluate`，返回 `result.value` |
 | `add_init_script(js)` | CDP `Page.addScriptToEvaluateOnNewDocument` |
 | `current_url()` | `Runtime.evaluate("document.URL")` |
@@ -224,8 +231,8 @@ struct BrowserConfig {
     std::string locale = "zh-CN";
     int timeout_ms = 30000;
     std::string sessions_dir = "data/sessions";
-    int cdp_port = 9222;            // Chrome remote debugging port
-    std::string chrome_path = "";   // 空则自动查找系统 Chrome
+    int cdp_port = 0;               // 0=自动随机端口，>0=固定端口
+    std::string chrome_path;        // 空则自动查找系统 Chrome
 };
 ```
 
@@ -258,17 +265,34 @@ CdpBrowserManager
 
 ```
 start()
-  ├─ 1. 子进程启动 Chrome:
-  │    chrome --headless --disable-gpu
-  │           --remote-debugging-port=config_.cdp_port
-  │           --no-sandbox --disable-dev-shm-usage
+  ├─ 1. scheduler_->start()        ← 初始化 libuv async handle
   │
-  ├─ 2. HTTP GET http://localhost:{port}/json/version
-  │    获取 webSocketDebuggerUrl
+  ├─ 2. scheduler_->run_blocking(work, done)  ← 在 worker 线程中执行:
+  │      work:
+  │        └─ fork()+execvp() 启动 Chrome:
+  │             chrome --headless --disable-gpu --no-sandbox
+  │                    --disable-dev-shm-usage
+  │                    --remote-allow-origins=*         ← Chrome 147 必需，允许 WS 连接
+  │                    --remote-debugging-address=127.0.0.1
+  │                    --remote-debugging-port=0        ← 随机端口，避免冲突
   │
-  └─ 3. IXWebSocket 连接 CDP WebSocket:
-       ws_.connect(webSocketDebuggerUrl)
-       ws_.start()  // 集成 libuv 事件循环
+  │        └─ 从 stdout 读取 "DevTools listening on ws://..."
+  │             → 解析 ws://127.0.0.1:{port}/devtools/browser/{uuid}
+  │
+  │        └─ HTTP GET http://127.0.0.1:{port}/json/version
+  │             轮询直到返回 200（等待 HTTP 服务就绪）
+  │
+  │      done:
+  │        └─ ws_.setUrl(cdp_ws_url)
+  │        └─ ws_.disableAutomaticReconnection()
+  │        └─ ws_.setOnMessageCallback(on_ws_message)
+  │        └─ ws_.start()  ← 异步连接 CDP WebSocket
+  │        └─ started_ = true
+  │
+  └─ 3. IXWebSocket 异步连接完成后触发 Open 回调:
+         → ws_ready_ = true
+         → flush pending_commands_
+         → send_command("Page.enable")
 ```
 
 ### 6.2 关闭
@@ -288,7 +312,8 @@ void CdpBrowserManager::send_command(
     const std::string& method,
     const nlohmann::json& params,
     std::function<void(nlohmann::json)> on_ok,
-    std::function<void(const std::string&)> on_error
+    std::function<void(const std::string&)> on_error,
+    const std::string& session_id = ""
 ) {
     int id = cmd_id_++;
     nlohmann::json msg = {
@@ -296,8 +321,18 @@ void CdpBrowserManager::send_command(
         {"method", method},
         {"params", params}
     };
+    if (!session_id.empty()) {
+        msg["sessionId"] = session_id;
+    }
+
     pending_[id] = {std::move(on_ok), std::move(on_error)};
-    ws_.send(msg.dump(), nullptr);
+
+    if (!ws_ready_) {
+        // WS 未就绪→入队，Open 后批量 flush
+        pending_commands_.push_back(std::move(msg));
+        return;
+    }
+    ws_.sendText(msg.dump());
 }
 ```
 
@@ -392,4 +427,67 @@ TA 使用真实 CDP headless Chrome（若 Chrome 不存在则 skip）。
 
 ---
 
-*文档版本：v2.0-cpp | 最后更新：2026-05-02*
+## 11. 手动验证
+
+### 11.1 前置条件
+
+```bash
+# 确保 Chrome 已安装
+google-chrome-stable --version
+# 或 chromium --version
+```
+
+### 11.2 运行自动化测试
+
+```bash
+# UT（不依赖 Chrome）
+dist/bin/test_browser_models_ut
+
+# TA（需要 Chrome，无 Chrome 时自动 skip）
+dist/bin/test_browser_ta
+
+# 全量回归
+cmake --build build --target test
+```
+
+### 11.3 手动端到端验证
+
+编译测试二进制后，直接执行 TA 测试验证完整流程。以下是 TA 覆盖的场景：
+
+| 验证场景 | 预期结果 |
+|---------|---------|
+| 启动 Chrome → CDP WS 连接 → health_check=true | `[PASS] start ok` |
+| 多次 start 幂等 | `[PASS] start twice: health true` |
+| start → stop → restart | `[PASS] first start` + `[PASS] restart ok` |
+| get_context（创建 Target + sessionId） | `[PASS] title not empty` + `[PASS] title is TA` |
+| get_context 缓存（同 platform 同指针） | `[PASS] cached: same pointer` |
+| 不同 platform 隔离 | `[PASS] different platforms → different ctx` |
+| add_init_script → close → reopen（不同指针） | `[PASS] close+reopen: different ptr` |
+| send_command 原始 CDP（Runtime.evaluate） | `[PASS] send_command 1+1=2` |
+| save_session → session JSON 文件落盘 | `[PASS] save: session file non-empty` |
+| **真实 URL: baidu.com** → navigate + evaluate 标题 | `[PASS] baidu: title contains 百度` |
+
+### 11.4 排查日志
+
+启动日志输出到 stderr，以 `[browser]` 为前缀：
+
+```text
+[browser] launching Chrome...                              ← fork+exec 开始
+[browser] launch_chrome done: url='ws://127.0.0.1:...     ← URL 解析成功
+[browser] on_done fired: url='...                          ← Chrome 就绪
+[browser] queue cmd=Target.createTarget                    ← WS 未就绪，命令入队
+[browser] WS OPEN callback fired                           ← WS 连接成功
+[browser] flushing N queued commands                       ← 积压命令发出
+```
+
+常见错误：
+
+| 日志 | 问题 | 修复 |
+|------|------|------|
+| `chrome did not output WS URL` | Chrome 未启动或端口冲突 | `pkill -9 chrome` 后再试 |
+| `WS ERROR: Failed reading HTTP status line / 403` | Chrome 147 缺少 `--remote-allow-origins=*` | 已自动添加 |
+| `QUEUE cmd=... (ws not ready)` 但无 OPEN | WS 连接失败 | 检查 Chrome 是否存活 (`health_check`) |
+
+---
+
+*文档版本：v2.1-cpp | 最后更新：2026-05-02*
