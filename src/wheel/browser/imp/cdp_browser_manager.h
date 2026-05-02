@@ -95,6 +95,9 @@ public:
         std::function<void(bool)> on_done,
         std::function<void(const std::string&)> on_error) override;
 
+    void step() override;
+    void run() override;
+
     // 被 CdpBrowserContext 调用：发送带 sessionId 的 CDP 命令
     void send_command(
         const std::string& method,

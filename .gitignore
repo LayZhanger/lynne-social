@@ -16,7 +16,8 @@ dist/
 
 # IDE
 .vscode/
-.idea/
+.idea/T
+Testing/
 CMakeLists.txt.user
 
 # CMake

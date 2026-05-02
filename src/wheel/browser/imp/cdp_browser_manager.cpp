@@ -678,5 +678,13 @@ void CdpBrowserManager::restore_session(const std::string& platform,
         [on_error](const std::string& err) { on_error(err); });
 }
 
+void CdpBrowserManager::step() {
+    scheduler_->step();
+}
+
+void CdpBrowserManager::run() {
+    scheduler_->run();
+}
+
 } // namespace wheel
 } // namespace lynne

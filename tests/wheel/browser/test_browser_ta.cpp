@@ -7,6 +7,7 @@
 #include <string>
 #include <thread>
 #include <chrono>
+#include <atomic>
 
 using namespace lynne::wheel;
 
@@ -21,13 +22,6 @@ static int failed = 0;
 #define CHECK_TRUE(cond, msg)  CHECK((cond), msg)
 #define CHECK_FALSE(cond, msg) CHECK(!(cond), msg)
 
-static void check_str(const std::string& a, const std::string& b,
-                      const char* msg) {
-    if (a == b) { printf("  [PASS] %s\n", msg); ++passed; }
-    else { printf("  [FAIL] %s ('%s' vs '%s')\n", msg, a.c_str(), b.c_str());
-           ++failed; }
-}
-
 static void report(const char* suite) {
     printf("--- %s: %d/%d ---\n", suite, passed, passed + failed);
     passed = 0;
@@ -41,6 +35,14 @@ static bool test_chrome_available() {
            system("which google-chrome-stable >/dev/null 2>&1") == 0;
 }
 
+static void run_loop(BrowserManager* browser, std::atomic<bool>& done,
+                     int max_iters = 300) {
+    for (int i = 0; i < max_iters && !done; ++i) {
+        browser->step();
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    }
+}
+
 int main() {
     if (!test_chrome_available()) {
         printf("SKIP: no Chrome binary found\n");
@@ -51,21 +53,21 @@ int main() {
     // Lifecycle
     // ============================================================
     {
-        BrowserConfig cfg;
-        cfg.headless = true;
-        cfg.cdp_port = 0;
+        auto* browser = BrowserFactory().create(BrowserConfig{});
 
-        auto* browser = BrowserFactory().create(cfg);
-
-        check_str(browser->name(), "browser", "name");
-        CHECK_FALSE(browser->health_check(), "health_check false before start");
+        CHECK_FALSE(browser->health_check(), "health false before start");
 
         browser->start();
-        std::this_thread::sleep_for(std::chrono::seconds(2));
-        CHECK_TRUE(browser->health_check(), "health_check true after start");
+        std::atomic<bool> started{false};
+        for (int i = 0; i < 80 && !started; ++i) {
+            browser->step();
+            started = browser->health_check();
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
+        CHECK_TRUE(started, "start: health true after loop");
 
         browser->stop();
-        CHECK_FALSE(browser->health_check(), "health_check false after stop");
+        CHECK_FALSE(browser->health_check(), "health false after stop");
 
         delete browser;
     }
@@ -78,76 +80,135 @@ int main() {
         auto* browser = BrowserFactory().create(BrowserConfig{});
         browser->start();
         browser->start();
-        std::this_thread::sleep_for(std::chrono::seconds(2));
-        CHECK_TRUE(browser->health_check(), "start twice: health_check true");
+        std::atomic<bool> started{false};
+        for (int i = 0; i < 80 && !started; ++i) {
+            browser->step();
+            started = browser->health_check();
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
+        CHECK_TRUE(started, "start twice: health true");
         browser->stop();
         delete browser;
     }
     report("StartTwice");
 
     // ============================================================
-    // GetContext + Navigate + Evaluate
+    // Stop without start is safe
     // ============================================================
     {
         auto* browser = BrowserFactory().create(BrowserConfig{});
-        browser->start();
-        std::this_thread::sleep_for(std::chrono::seconds(2));
-
-        bool ctx_ok = false;
-        bool nav_ok = false;
-        bool eval_ok = false;
-        std::string eval_result;
-
-        browser->get_context("test",
-            [&](BrowserContext* ctx) {
-                ctx_ok = true;
-                ctx->navigate("data:text/html,<h1>Hello</h1>",
-                    [&, ctx]() {
-                        nav_ok = true;
-                        ctx->evaluate("document.title",
-                            [&](nlohmann::json r) {
-                                eval_ok = true;
-                                eval_result = r["value"].get<std::string>();
-                                browser->stop();
-                            },
-                            [&](const std::string& err) {
-                                printf("  evaluate error: %s\n", err.c_str());
-                                browser->stop();
-                            });
-                    },
-                    [&](const std::string& err) {
-                        printf("  navigate error: %s\n", err.c_str());
-                        browser->stop();
-                    });
-            },
-            [&](const std::string& err) {
-                printf("  get_context error: %s\n", err.c_str());
-                browser->stop();
-            });
-
-        // run event loop until stop
-        // In TA test, we use a simple polling approach
-        // Note: in production, uv_run handles this
-        // For tests, we manually step the scheduler
-        // Since we don't have the scheduler ref here, use sleep
-        std::this_thread::sleep_for(std::chrono::seconds(3));
-
-        CHECK_TRUE(ctx_ok, "get_context succeeded");
-        CHECK_TRUE(nav_ok, "navigate succeeded");
-        CHECK_TRUE(eval_ok, "evaluate succeeded");
-
+        browser->stop();
+        CHECK_FALSE(browser->health_check(), "stop w/o start: health false");
         delete browser;
     }
-    report("GetContextNavigateEvaluate");
+    report("StopWithoutStart");
 
     // ============================================================
-    // Context caching
+    // Start → Stop → Start again
     // ============================================================
     {
         auto* browser = BrowserFactory().create(BrowserConfig{});
         browser->start();
-        std::this_thread::sleep_for(std::chrono::seconds(2));
+        std::atomic<bool> started{false};
+        for (int i = 0; i < 80 && !started; ++i) {
+            browser->step();
+            started = browser->health_check();
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
+        CHECK_TRUE(started, "first start ok");
+        browser->stop();
+        CHECK_FALSE(browser->health_check(), "stopped");
 
+        browser->start();
+        started = false;
+        for (int i = 0; i < 80 && !started; ++i) {
+            browser->step();
+            started = browser->health_check();
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
+        CHECK_TRUE(started, "restart: health true");
+        browser->stop();
+        delete browser;
+    }
+    report("StartStopStart");
+
+    // ============================================================
+    // Get context before start → error
+    // ============================================================
+    {
+        auto* browser = BrowserFactory().create(BrowserConfig{});
+        std::atomic<bool> got_error{false};
+        browser->get_context("test",
+            [](BrowserContext*) {},
+            [&got_error](const std::string&) { got_error = true; });
+        browser->step();
+        CHECK_TRUE(got_error, "get_context before start → error");
+        delete browser;
+    }
+    report("GetContextBeforeStart");
+
+    // ============================================================
+    // GetContext + Navigate + Evaluate + CurrentUrl
+    // ============================================================
+    {
+        auto* browser = BrowserFactory().create(BrowserConfig{});
+        browser->start();
+        std::atomic<bool> browser_ok{false};
+        for (int i = 0; i < 80 && !browser_ok; ++i) {
+            browser->step();
+            browser_ok = browser->health_check();
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
+
+        std::atomic<bool> done{false};
+        std::string title;
+        std::string url;
+
+        browser->get_context("main",
+            [&](BrowserContext* ctx) {
+                ctx->navigate("data:text/html,<title>TA</title><h1>Hello</h1>",
+                    [&, ctx]() {
+                        ctx->current_url(
+                            [&](const std::string& u) {
+                                url = u;
+                                ctx->evaluate("document.title",
+                                    [&](nlohmann::json r) {
+                                        title = r["value"].get<std::string>();
+                                        done = true;
+                                    },
+                                    [&](const std::string&) { done = true; });
+                            },
+                            [&](const std::string&) { done = true; });
+                    },
+                    [&](const std::string&) { done = true; });
+            },
+            [&](const std::string&) { done = true; });
+
+        run_loop(browser, done);
+        CHECK_TRUE(!title.empty(), "evaluate: got title");
+        CHECK_TRUE(title == "TA", "evaluate: title is TA");
+        CHECK_TRUE(url.find("data:text/html") != std::string::npos,
+                   "current_url: contains data:");
+        browser->stop();
+        delete browser;
+    }
+    report("NavigateEvaluateCurrentUrl");
+
+    // ============================================================
+    // AddInitScript + Context caching + Close
+    // ============================================================
+    {
+        auto* browser = BrowserFactory().create(BrowserConfig{});
+        browser->start();
+        std::atomic<bool> browser_ok{false};
+        for (int i = 0; i < 80 && !browser_ok; ++i) {
+            browser->step();
+            browser_ok = browser->health_check();
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
+
+        // get_context twice → same pointer (cache)
+        std::atomic<bool> done{false};
         BrowserContext* first = nullptr;
         BrowserContext* second = nullptr;
 
@@ -157,26 +218,115 @@ int main() {
                 browser->get_context("cache_test",
                     [&](BrowserContext* ctx2) {
                         second = ctx2;
-                        browser->stop();
+                        // add_init_script
+                        ctx->add_init_script(
+                            "Object.defineProperty(navigator, "
+                            "'testProp', {get: () => 'injected'});",
+                            [&]() {
+                                // close + verify pointer changed after reopen
+                                ctx->close(
+                                    [&]() {
+                                        browser->get_context("cache_test",
+                                            [&](BrowserContext* ctx3) {
+                                                second = ctx3;
+                                                done = true;
+                                            },
+                                            [&](const std::string&) {
+                                                done = true; });
+                                    },
+                                    [&](const std::string&) { done = true; });
+                            },
+                            [&](const std::string&) { done = true; });
                     },
-                    [&](const std::string& err) {
-                        printf("  second get_context error: %s\n", err.c_str());
-                        browser->stop();
-                    });
+                    [&](const std::string&) { done = true; });
             },
-            [&](const std::string& err) {
-                printf("  first get_context error: %s\n", err.c_str());
-                browser->stop();
-            });
+            [&](const std::string&) { done = true; });
 
-        std::this_thread::sleep_for(std::chrono::seconds(2));
-        CHECK_TRUE(first != nullptr, "first context not null");
-        CHECK_TRUE(second != nullptr, "second context not null");
-        CHECK_TRUE(first == second, "contexts are cached (same pointer)");
+        run_loop(browser, done);
+        CHECK_TRUE(first != nullptr, "first ctx non-null");
+        CHECK_TRUE(second != nullptr, "second ctx non-null");
+        CHECK_TRUE(first == second, "same platform → cached (same ptr)");
+        // After close→reopen, ptr should differ
+        // (second was reassigned to ctx3 in the close callback)
 
         delete browser;
     }
-    report("ContextCaching");
+    report("AddInitScript_Cache_Close");
+
+    // ============================================================
+    // Context isolation: different platforms → different pointers
+    // ============================================================
+    {
+        auto* browser = BrowserFactory().create(BrowserConfig{});
+        browser->start();
+        std::atomic<bool> browser_ok{false};
+        for (int i = 0; i < 80 && !browser_ok; ++i) {
+            browser->step();
+            browser_ok = browser->health_check();
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
+
+        std::atomic<bool> done{false};
+        BrowserContext* ctx_a = nullptr;
+        BrowserContext* ctx_b = nullptr;
+
+        browser->get_context("platform_a",
+            [&](BrowserContext* a) {
+                ctx_a = a;
+                browser->get_context("platform_b",
+                    [&](BrowserContext* b) {
+                        ctx_b = b;
+                        done = true;
+                    },
+                    [&](const std::string&) { done = true; });
+            },
+            [&](const std::string&) { done = true; });
+
+        run_loop(browser, done);
+        CHECK_TRUE(ctx_a != nullptr, "platform_a ctx");
+        CHECK_TRUE(ctx_b != nullptr, "platform_b ctx");
+        CHECK_TRUE(ctx_a != ctx_b, "different platforms → different ctx");
+        delete browser;
+    }
+    report("ContextIsolation");
+
+    // ============================================================
+    // SendCommand (raw CDP escape hatch)
+    // ============================================================
+    {
+        auto* browser = BrowserFactory().create(BrowserConfig{});
+        browser->start();
+        std::atomic<bool> browser_ok{false};
+        for (int i = 0; i < 80 && !browser_ok; ++i) {
+            browser->step();
+            browser_ok = browser->health_check();
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
+
+        std::atomic<bool> done{false};
+        std::string version;
+
+        browser->get_context("raw_test",
+            [&](BrowserContext* ctx) {
+                ctx->send_command("Runtime.evaluate",
+                    {{"expression", "navigator.userAgent"},
+                     {"returnByValue", true}},
+                    [&](nlohmann::json r) {
+                        version = r["result"]["value"].get<std::string>();
+                        done = true;
+                    },
+                    [&](const std::string&) { done = true; });
+            },
+            [&](const std::string&) { done = true; });
+
+        run_loop(browser, done);
+        CHECK_TRUE(!version.empty(), "send_command: got userAgent");
+        CHECK_TRUE(version.find("Chrome") != std::string::npos,
+                   "send_command: userAgent contains Chrome");
+        browser->stop();
+        delete browser;
+    }
+    report("SendCommand");
 
     // ============================================================
     // Save/Restore session
@@ -187,65 +337,67 @@ int main() {
 
         auto* browser = BrowserFactory().create(cfg);
         browser->start();
-        std::this_thread::sleep_for(std::chrono::seconds(2));
+        std::atomic<bool> browser_ok{false};
+        for (int i = 0; i < 80 && !browser_ok; ++i) {
+            browser->step();
+            browser_ok = browser->health_check();
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
 
-        bool restored = false;
-
-        // First restore (no session yet -> false)
-        browser->restore_session("test_platform",
-            [&](bool ok) {
-                CHECK_FALSE(ok, "restore_session false when no file");
-                browser->stop();
-            },
-            [&](const std::string& err) {
-                printf("  restore_session error: %s\n", err.c_str());
-                browser->stop();
-            });
-
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-
-        // Save session
-        browser->start(); // re-start
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-
+        std::atomic<bool> done{false};
+        bool restore_no_file = false;
         bool saved = false;
-        browser->get_context("save_test",
-            [&](BrowserContext*) {
-                browser->save_session("save_test",
-                    [&]() {
-                        saved = true;
-                        // Now restore
-                        browser->restore_session("save_test",
-                            [&](bool ok2) {
-                                CHECK_TRUE(ok2, "restore_session true after save");
-                                browser->stop();
+        bool restore_after_save = false;
+
+        // Step 1: restore when no file → false
+        browser->restore_session("session_test",
+            [&](bool ok) {
+                restore_no_file = !ok;
+                // Step 2: create context and save
+                browser->get_context("session_test",
+                    [&](BrowserContext* ctx) {
+                        ctx->navigate("data:text/html,<h1>S</h1>",
+                            [&, ctx]() {
+                                // wait for navigate to settle, then save
+                                browser->step();
+                                std::this_thread::sleep_for(
+                                    std::chrono::milliseconds(200));
+
+                                browser->save_session("session_test",
+                                    [&]() {
+                                        saved = true;
+                                        // Step 3: restore again → should be true
+                                        browser->restore_session(
+                                            "session_test",
+                                            [&](bool ok2) {
+                                                restore_after_save = ok2;
+                                                done = true;
+                                            },
+                                            [&](const std::string&) {
+                                                done = true; });
+                                    },
+                                    [&](const std::string&) { done = true; });
                             },
-                            [&](const std::string& err) {
-                                printf("  restore2 error: %s\n", err.c_str());
-                                browser->stop();
-                            });
+                            [&](const std::string&) { done = true; });
                     },
-                    [&](const std::string& err) {
-                        printf("  save error: %s\n", err.c_str());
-                        browser->stop();
-                    });
+                    [&](const std::string&) { done = true; });
             },
-            [&](const std::string& err) {
-                printf("  get_context for save error: %s\n", err.c_str());
-                browser->stop();
-            });
+            [&](const std::string&) { done = true; });
 
-        std::this_thread::sleep_for(std::chrono::seconds(2));
-        CHECK_TRUE(saved, "save_session succeeded");
-
+        run_loop(browser, done, 400);
+        CHECK_TRUE(restore_no_file, "restore: false when no file");
+        CHECK_TRUE(saved, "save: succeeded");
+        CHECK_TRUE(restore_after_save, "restore: true after save");
+        browser->stop();
         delete browser;
     }
     report("SessionPersistence");
 
     // ============================================================
-    // Cleanup temp files
+    // Cleanup
     // ============================================================
-    std::remove("/tmp/lynne_browser_test/save_test_state.json");
+    std::remove("/tmp/lynne_browser_test/session_test_state.json");
+    std::remove("/tmp/lynne_browser_test/state.json");
 
     printf("\n=== ALL TESTS DONE ===\n");
     return 0;

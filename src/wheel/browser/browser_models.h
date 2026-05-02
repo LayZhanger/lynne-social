@@ -1,7 +1,8 @@
 #pragma once
 
-#include <string>
 #include <json.hpp>
+
+#include <string>
 
 namespace lynne {
 namespace wheel {
@@ -18,9 +19,8 @@ struct BrowserConfig {
     std::string chrome_path;
 };
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(BrowserConfig, headless, slow_mo_ms,
-    viewport_width, viewport_height, locale, timeout_ms, sessions_dir,
-    cdp_port, chrome_path)
+void to_json(nlohmann::json& j, const BrowserConfig& cfg);
+void from_json(const nlohmann::json& j, BrowserConfig& cfg);
 
 } // namespace wheel
 } // namespace lynne

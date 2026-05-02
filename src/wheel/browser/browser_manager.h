@@ -65,6 +65,9 @@ public:
     virtual void restore_session(const std::string& platform,
         std::function<void(bool)> on_done,
         std::function<void(const std::string&)> on_error) = 0;
+
+    virtual void step() = 0;
+    virtual void run() = 0;
 };
 
 } // namespace wheel
