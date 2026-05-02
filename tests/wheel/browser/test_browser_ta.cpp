@@ -1,6 +1,8 @@
 #include "wheel/browser/browser_manager.h"
 #include "wheel/browser/browser_factory.h"
 #include "wheel/browser/browser_models.h"
+#include "wheel/logger/logger_factory.h"
+#include "wheel/logger/logger_macros.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -49,6 +51,10 @@ int main() {
         printf("SKIP: no Chrome binary found\n");
         return 0;
     }
+
+    // 初始化标准日志，让浏览器模块的 LOG_* 输出可见
+    g_logger_ptr = LoggerFactory().create({"INFO"});
+    g_logger_ptr->start();
 
     // ============================================================
     // Lifecycle
