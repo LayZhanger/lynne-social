@@ -5,6 +5,8 @@
 > 源码：`src/wheel/browser/`
 >
 > **本文分两部分**：第 1-3 节定义抽象规范（与实现无关），第 4-6 节描述 CDP 实现。
+>
+> CDP 协议基础见 [`doc/tech/cdp.md`](../../../tech/cdp.md)。
 
 ---
 
