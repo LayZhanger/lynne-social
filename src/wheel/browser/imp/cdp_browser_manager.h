@@ -63,6 +63,35 @@ public:
         std::function<void()> on_done,
         std::function<void(const std::string&)> on_error) override;
 
+    void click(const std::string& css_selector,
+        std::function<void()> on_done,
+        std::function<void(const std::string&)> on_error) override;
+
+    void type(const std::string& css_selector, const std::string& text,
+        std::function<void()> on_done,
+        std::function<void(const std::string&)> on_error) override;
+
+    void scroll(int delta_x, int delta_y,
+        std::function<void()> on_done,
+        std::function<void(const std::string&)> on_error) override;
+
+    void press_key(const std::string& key,
+        std::function<void()> on_done,
+        std::function<void(const std::string&)> on_error) override;
+
+    void hover(const std::string& css_selector,
+        std::function<void()> on_done,
+        std::function<void(const std::string&)> on_error) override;
+
+    void exists(const std::string& css_selector,
+        std::function<void(bool)> on_result,
+        std::function<void(const std::string&)> on_error) override;
+
+    void wait_for_selector(const std::string& css_selector,
+        uint64_t timeout_ms,
+        std::function<void()> on_found,
+        std::function<void(const std::string&)> on_timeout) override;
+
 private:
     class CdpBrowserManager* manager_;
     std::string platform_;

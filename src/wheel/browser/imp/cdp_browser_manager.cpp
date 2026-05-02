@@ -6,7 +6,9 @@
 
 #include <cstdio>
 #include <cstring>
+#include <chrono>
 #include <fstream>
+#include <memory>
 #include <sstream>
 #include <thread>
 #include <vector>
@@ -219,6 +221,173 @@ void CdpBrowserContext::close(
             LOG_ERROR("browser", "closeTarget error: %s", err.c_str());
             on_error(err);
         });
+}
+
+void CdpBrowserContext::click(const std::string& css_selector,
+    std::function<void()> on_done,
+    std::function<void(const std::string&)> on_error) {
+    if (closed_) { on_error("context closed"); return; }
+    std::string js = R"((()=>{
+        const e=document.querySelector(')" + css_selector + R"(');
+        if(!e)return false;
+        e.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true,view:window}));
+        e.dispatchEvent(new MouseEvent('mouseup',{bubbles:true,cancelable:true,view:window}));
+        e.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,view:window}));
+        if(e.tagName==='A'&&e.href)window.location.href=e.href;
+        else if(e.form&&(e.type==='submit'||e.tagName==='BUTTON'))e.form.submit();
+        return true;
+    })())";
+    evaluate(js,
+        [on_done, on_error](nlohmann::json res) {
+            if (res.contains("value") && !res["value"].is_null()
+                && res["value"].get<bool>()) {
+                on_done();
+            } else {
+                on_error("click: element not found");
+            }
+        },
+        on_error);
+}
+
+void CdpBrowserContext::type(const std::string& css_selector, const std::string& text,
+    std::function<void()> on_done,
+    std::function<void(const std::string&)> on_error) {
+    if (closed_) { on_error("context closed"); return; }
+    // 用 DOM API 聚焦 + 设值，比 CDP Input.insertText 更可靠
+    std::string escaped;
+    escaped.reserve(text.size());
+    for (char c : text) {
+        if (c == '\\') escaped += "\\\\";
+        else if (c == '\'') escaped += "\\'";
+        else if (c == '\n') escaped += "\\n";
+        else if (c == '\r') escaped += "\\r";
+        else escaped += c;
+    }
+    std::string js = "(()=>{const e=document.querySelector('"
+        + css_selector + "');if(!e)return false;"
+        "e.focus();e.value='" + escaped + "';"
+        "e.dispatchEvent(new Event('input',{bubbles:true}));"
+        "e.dispatchEvent(new Event('change',{bubbles:true}));"
+        "return true;})()";
+    evaluate(js,
+        [on_done, on_error](nlohmann::json res) {
+            if (res.contains("value") && !res["value"].is_null()
+                && res["value"].get<bool>()) {
+                on_done();
+            } else {
+                on_error("type: element not found");
+            }
+        },
+        on_error);
+}
+
+void CdpBrowserContext::scroll(int delta_x, int delta_y,
+    std::function<void()> on_done,
+    std::function<void(const std::string&)> on_error) {
+    if (closed_) { on_error("context closed"); return; }
+    std::string js = "window.scrollBy(" + std::to_string(delta_x)
+                     + "," + std::to_string(delta_y) + ")";
+    evaluate(js,
+        [on_done](nlohmann::json) { on_done(); },
+        on_error);
+}
+
+void CdpBrowserContext::press_key(const std::string& key,
+    std::function<void()> on_done,
+    std::function<void(const std::string&)> on_error) {
+    if (closed_) { on_error("context closed"); return; }
+    int vk = 0;
+    if (key == "Enter") vk = 13;
+    else if (key == "Tab") vk = 9;
+    else if (key == "Escape") vk = 27;
+    else if (key == "Backspace") vk = 8;
+    else if (key == "Delete") vk = 46;
+    nlohmann::json down = {{"type", "keyDown"}, {"key", key}};
+    if (vk > 0) down["windowsVirtualKeyCode"] = vk;
+    if (key == "Enter") down["text"] = "\r";
+    manager_->send_command("Input.dispatchKeyEvent", down,
+        [this, key, vk, on_done, on_error](const nlohmann::json&) {
+            nlohmann::json up = {{"type", "keyUp"}, {"key", key}};
+            if (vk > 0) up["windowsVirtualKeyCode"] = vk;
+            manager_->send_command("Input.dispatchKeyEvent", up,
+                [on_done](const nlohmann::json&) { on_done(); },
+                on_error, session_id_);
+        },
+        on_error, session_id_);
+}
+
+void CdpBrowserContext::hover(const std::string& css_selector,
+    std::function<void()> on_done,
+    std::function<void(const std::string&)> on_error) {
+    if (closed_) { on_error("context closed"); return; }
+    std::string js = R"((()=>{
+        const e=document.querySelector(')" + css_selector + R"(');
+        if(!e)return false;
+        e.dispatchEvent(new MouseEvent('mouseover',{bubbles:true,cancelable:true,view:window}));
+        e.dispatchEvent(new MouseEvent('mouseenter',{bubbles:false,cancelable:true,view:window}));
+        return true;
+    })())";
+    evaluate(js,
+        [on_done, on_error](nlohmann::json res) {
+            if (res.contains("value") && !res["value"].is_null()
+                && res["value"].get<bool>()) {
+                on_done();
+            } else {
+                on_error("hover: element not found");
+            }
+        },
+        on_error);
+}
+
+void CdpBrowserContext::exists(const std::string& css_selector,
+    std::function<void(bool)> on_result,
+    std::function<void(const std::string&)> on_error) {
+    if (closed_) { on_error("context closed"); return; }
+    std::string js = "!!document.querySelector('" + css_selector + "')";
+    evaluate(js,
+        [on_result](nlohmann::json res) {
+            bool found = false;
+            if (res.contains("value") && !res["value"].is_null())
+                found = res["value"].get<bool>();
+            on_result(found);
+        },
+        [on_error](const std::string& err) { on_error(err); });
+}
+
+void CdpBrowserContext::wait_for_selector(const std::string& css_selector,
+    uint64_t timeout_ms,
+    std::function<void()> on_found,
+    std::function<void(const std::string&)> on_timeout) {
+    if (closed_) { on_timeout("context closed"); return; }
+    auto start = std::chrono::steady_clock::now();
+    auto done = std::make_shared<bool>(false);
+
+    auto check = std::make_shared<std::function<void()>>();
+    *check = [this, css_selector, timeout_ms, on_found, on_timeout,
+              start, done, check]() {
+        if (*done || closed_) { *done = true; return; }
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start).count();
+        if (elapsed >= (int64_t)timeout_ms) {
+            *done = true;
+            on_timeout("wait_for_selector timeout (" + css_selector + ")");
+            return;
+        }
+        evaluate("!!document.querySelector('" + css_selector + "')",
+            [done, on_found, check](nlohmann::json res) {
+                if (*done) return;
+                bool found = false;
+                if (res.contains("value") && !res["value"].is_null())
+                    found = res["value"].get<bool>();
+                if (found) { *done = true; on_found(); }
+                else { check->operator()(); }
+            },
+            [done, on_timeout, check](const std::string&) {
+                if (*done) return;
+                check->operator()();
+            });
+    };
+    manager_->scheduler()->post(*check);
 }
 
 // ============================================================

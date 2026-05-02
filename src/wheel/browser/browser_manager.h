@@ -3,6 +3,7 @@
 #include "common/module.h"
 #include "wheel/browser/browser_models.h"
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -47,6 +48,37 @@ public:
     virtual void close(
         std::function<void()> on_done,
         std::function<void(const std::string&)> on_error) = 0;
+
+    // ——— 人机交互 ——————————————————————————————
+
+    virtual void click(const std::string& css_selector,
+        std::function<void()> on_done,
+        std::function<void(const std::string&)> on_error) = 0;
+
+    virtual void type(const std::string& css_selector, const std::string& text,
+        std::function<void()> on_done,
+        std::function<void(const std::string&)> on_error) = 0;
+
+    virtual void scroll(int delta_x, int delta_y,
+        std::function<void()> on_done,
+        std::function<void(const std::string&)> on_error) = 0;
+
+    virtual void press_key(const std::string& key,
+        std::function<void()> on_done,
+        std::function<void(const std::string&)> on_error) = 0;
+
+    virtual void hover(const std::string& css_selector,
+        std::function<void()> on_done,
+        std::function<void(const std::string&)> on_error) = 0;
+
+    virtual void exists(const std::string& css_selector,
+        std::function<void(bool)> on_result,
+        std::function<void(const std::string&)> on_error) = 0;
+
+    virtual void wait_for_selector(const std::string& css_selector,
+        uint64_t timeout_ms,
+        std::function<void()> on_found,
+        std::function<void(const std::string&)> on_timeout) = 0;
 };
 
 // ============================================================
