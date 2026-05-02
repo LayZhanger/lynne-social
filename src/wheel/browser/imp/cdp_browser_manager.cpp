@@ -1,5 +1,6 @@
 #include "wheel/browser/imp/cdp_browser_manager.h"
 #include "wheel/scheduler/scheduler_factory.h"
+#include "wheel/logger/logger_macros.h"
 
 #include <json.hpp>
 
@@ -215,7 +216,7 @@ void CdpBrowserContext::close(
             on_done();
         },
         [on_error](const std::string& err) {
-            fprintf(stderr, "[browser] closeTarget error: %s\n", err.c_str());
+            LOG_ERROR("browser", "closeTarget error: %s", err.c_str());
             on_error(err);
         });
 }
@@ -432,7 +433,7 @@ void CdpBrowserManager::send_command(
     pending_[id] = {std::move(on_ok), std::move(on_error)};
 
     if (!ws_ready_) {
-        fprintf(stderr, "[browser] queue cmd=%s\n", method.c_str());
+        LOG_INFO("browser", "queue cmd=%s", method.c_str());
         pending_commands_.push_back(msg);
         return;
     }
@@ -466,14 +467,14 @@ void CdpBrowserManager::start() {
 
     scheduler_->run_blocking(
         [this, state]() {
-            fprintf(stderr, "[browser] launching Chrome...\n");
+            LOG_INFO("browser", "launching Chrome...");
             launch_chrome(state->url, state->error);
-            fprintf(stderr, "[browser] launch_chrome done: url='%s' err='%s'\n",
-                    state->url.c_str(), state->error.c_str());
+            LOG_INFO("browser", "launch_chrome done: url='%s' err='%s'",
+                     state->url.c_str(), state->error.c_str());
         },
         [this, state]() {
-            fprintf(stderr, "[browser] on_done fired: url='%s' err='%s'\n",
-                    state->url.c_str(), state->error.c_str());
+            LOG_INFO("browser", "on_done fired: url='%s' err='%s'",
+                     state->url.c_str(), state->error.c_str());
             if (!state->error.empty() || state->url.empty()) {
                 return;
             }
@@ -507,8 +508,8 @@ void CdpBrowserManager::start() {
                         self->on_ws_message(data);
                     });
                 } else if (msg->type == ix::WebSocketMessageType::Error) {
-                    fprintf(stderr, "[browser] WS ERROR: %s\n",
-                            msg->errorInfo.reason.c_str());
+                    LOG_ERROR("browser", "WS ERROR: %s",
+                              msg->errorInfo.reason.c_str());
                     self->chrome_crashed_ = true;
                 }
             });
@@ -615,7 +616,7 @@ window.chrome = {runtime: {}};
                 "");  // attachToTarget 是根级命令，无 sessionId
         },
                 [this, platform, on_error](const std::string& err) {
-                    fprintf(stderr, "[browser] createTarget error: %s\n", err.c_str());
+                    LOG_ERROR("browser", "createTarget error: %s", err.c_str());
                     on_error(err);
                 },
                 "");

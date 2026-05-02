@@ -1,7 +1,10 @@
 #include "wheel/logger/logger_models.h"
+#include "wheel/logger/logger_macros.h"
 
 namespace lynne {
 namespace wheel {
+
+Logger* g_logger_ptr = nullptr;
 
 void from_json(const nlohmann::json& j, LogConfig& c) {
     c.level = j.value("level", "INFO");

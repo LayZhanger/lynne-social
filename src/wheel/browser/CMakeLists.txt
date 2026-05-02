@@ -13,6 +13,7 @@ target_include_directories(lynne_browser PUBLIC
 
 target_link_libraries(lynne_browser PUBLIC
     lynne_common
+    lynne_logger
     lynne_scheduler
     lynne_ws_client
     ${DIST_DIR}/lib/libixwebsocket.a
