@@ -4,7 +4,7 @@
 > 依赖：`wheel/logger`（日志），IXWebSocket + libuv
 > 源码：`src/wheel/browser/`
 >
-> **本文分两部分**：第 1-3 节定义抽象规范（与实现无关），第 4-6 节描述 CDP 实现。
+> **本文分两部分**：第 1-3 节定义抽象规范（与实现无关），第 4-10 节描述 CDP 实现。
 >
 > CDP 协议基础见 [`doc/tech/cdp.md`](../../../tech/cdp.md)。
 
@@ -40,6 +40,8 @@ BrowserManager 是浏览器引擎的抽象。它定义了 "管理浏览器生命
 
 ## 2. 接口定义
 
+### 2.1 BrowserManager
+
 ```cpp
 class BrowserManager : public Module {
 public:
@@ -48,7 +50,7 @@ public:
     void stop() override = 0;
     bool health_check() override = 0;
 
-    // 平台上下文（每个平台隔离的浏览会话）
+    // 平台上下文（每个平台隔离的浏览会话，缓存）
     virtual void get_context(const std::string& platform,
         std::function<void(BrowserContext*)> on_ok,
         std::function<void(const std::string&)> on_error) = 0;
@@ -57,22 +59,75 @@ public:
     virtual void save_session(const std::string& platform,
         std::function<void()> on_done,
         std::function<void(const std::string&)> on_error) = 0;
-
-    // 登录流程
-    virtual void login_flow(const std::string& platform,
-        const std::string& url) = 0;
-    virtual void set_login_complete(const std::string& platform) = 0;
+    virtual void restore_session(const std::string& platform,
+        std::function<void(bool restored)> on_done,
+        std::function<void(const std::string&)> on_error) = 0;
 };
 ```
 
 | 方法 | 语义 |
 |------|------|
-| `start()` | 启动浏览器子进程 + 连接 CDP WebSocket 端口 |
-| `stop()` | 关闭所有上下文 → kill 子进程 |
-| `get_context(platform)` | 获取指定平台的浏览上下文（缓存） |
-| `save_session(platform)` | 持久化当前认证状态（CDP Storage.getCookies） |
-| `login_flow(platform, url)` | 打开登录页（CDP Page.navigate），进入等待状态 |
-| `set_login_complete(platform)` | 确认登录完成，保存会话 |
+| `start()` | 启动 Chrome 子进程 + 连接 CDP WebSocket |
+| `stop()` | 关闭所有 context → 断开 WS → kill 子进程 |
+| `health_check()` | 检查 Chrome 进程 + WS 连接是否正常 |
+| `get_context(platform)` | 获取/创建平台隔离的浏览上下文（缓存） |
+| `save_session(platform)` | CDP `Storage.getCookies` → 写入 `{platform}_state.json` |
+| `restore_session(platform)` | 读文件 → CDP `Storage.setCookies`，无文件时 `on_done(false)` |
+
+### 2.2 BrowserContext
+
+```cpp
+class BrowserContext {
+public:
+    virtual ~BrowserContext() = default;
+
+    // 导航到 URL，等待页面加载完成
+    virtual void navigate(const std::string& url,
+        std::function<void()> on_loaded,
+        std::function<void(const std::string&)> on_error) = 0;
+
+    // 执行 JS，返回结果
+    virtual void evaluate(const std::string& js,
+        std::function<void(nlohmann::json)> on_result,
+        std::function<void(const std::string&)> on_error) = 0;
+
+    // 注入反检测脚本（每次新 document 自动执行）
+    virtual void add_init_script(const std::string& js,
+        std::function<void()> on_done,
+        std::function<void(const std::string&)> on_error) = 0;
+
+    // 获取当前页面 URL
+    virtual void current_url(
+        std::function<void(const std::string&)> on_url,
+        std::function<void(const std::string&)> on_error) = 0;
+
+    // 截图（调试用）
+    virtual void screenshot(const std::string& filepath,
+        std::function<void()> on_done,
+        std::function<void(const std::string&)> on_error) = 0;
+
+    // 原始 CDP 命令（Input.* / Network.* 等逃生口）
+    virtual void send_command(const std::string& method,
+        const nlohmann::json& params,
+        std::function<void(nlohmann::json)> on_ok,
+        std::function<void(const std::string&)> on_error) = 0;
+
+    // 关闭此上下文（关标签页、清缓存、指针失效）
+    virtual void close(
+        std::function<void()> on_done,
+        std::function<void(const std::string&)> on_error) = 0;
+};
+```
+
+| 方法 | 语义 |
+|------|------|
+| `navigate(url)` | CDP `Page.navigate`，等 `Page.frameStoppedLoading` 后调用 `on_loaded` |
+| `evaluate(js)` | CDP `Runtime.evaluate`，返回 `result.value` |
+| `add_init_script(js)` | CDP `Page.addScriptToEvaluateOnNewDocument` |
+| `current_url()` | `Runtime.evaluate("document.URL")` |
+| `screenshot(path)` | CDP `Page.captureScreenshot` → base64 解码 → 写文件 |
+| `send_command(m, p)` | 任意 CDP `{method, params}`，`on_ok(result)` |
+| `close()` | CDP `Target.closeTarget` → 从 BrowserManager 缓存移除 → 指针失效 |
 
 ---
 
@@ -95,44 +150,63 @@ BrowserManager* browser = factory.create(cfg);
 ### 3.2 标准采集流程
 
 ```cpp
-browser->start();                         // Step 1: 启动浏览器 + CDP 连接
+browser->start();                         // Step 1: 启动 Chrome + CDP
 
 browser->get_context("twitter",           // Step 2: 拿隔离上下文（缓存）
     [](BrowserContext* ctx) {
-        // Step 3: CDP evaluate / navigate
-        ctx->navigate("https://x.com/search?...", [](){
-            printf("navigated\n");
-        });
+        // Step 3: 导航 + JS 提取
+        ctx->navigate("https://x.com/search?...", [ctx](){
+            ctx->evaluate("document.title", [](nlohmann::json r){
+                printf("title: %s\n", r.get<std::string>().c_str());
+            }, nullptr);
+        }, nullptr);
     },
     [](const std::string& err) {
         printf("error: %s\n", err.c_str());
     });
 
-browser->save_session("twitter",          // Step 4: 持久化会话
-    [](){ printf("session saved\n"); },
-    nullptr);
-
 // stop() 由 Agent / main.cpp 决定何时调用
 ```
 
-### 3.3 CDP 命令示例
+### 3.3 登录编排（上层实现，BrowserManager 不感知）
 
-BrowserManager 下层提供 CDP 原始命令接口：
+登录流程由 API Layer 或 `main.cpp` 用公开原语组装：
 
+```cpp
+browser->get_context("rednote", [browser](BrowserContext* ctx) {
+    ctx->navigate("https://www.xiaohongshu.com/login", [ctx, browser]() {
+        // 用户手动在浏览器中登录
+        // 登录完成后触发:
+        browser->save_session("rednote", [](){
+            printf("session saved\n");
+        }, nullptr);
+    }, nullptr);
+}, on_error);
 ```
-Page.navigate(url)              → 导航到目标页面
-Runtime.evaluate(js)            → 执行 JS，返回结果
-Page.addScriptToEvaluateOnNewDocument(js)  → 反检测脚本注入
-Storage.getCookies              → 导出 cookies
+
+不需要 `login_flow` / `set_login_complete` 接口——登录只是一个 navigate + 手动操作 + save_session 的编排。
+
+### 3.4 反检测（Stealth）
+
+`get_context()` 创建新 context 时自动注入反检测脚本，Adapter 不感知：
+
+```cpp
+// get_context("rednote") 内部自动执行:
+//   Target.createTarget → Target.attachToSessionId
+//   → Page.addScriptToEvaluateOnNewDocument(stealth.js)
+//   → cache context
 ```
 
-### 3.4 注意事项
+隐藏的 CDP 特征包括：`navigator.webdriver`、`navigator.plugins`、`window.chrome` 等。
+
+### 3.5 注意事项
 
 | 要点 | 说明 |
 |------|------|
 | `start()` 幂等 | 已启动时直接 return |
 | `get_context` 有缓存 | 同一 platform 第二次直接返回缓存 |
 | `get_context` 前必须 `start()` | 否则 `RuntimeError("not started")` |
+| `context->close()` 后指针失效 | 调用方保证不再使用该指针 |
 | 会话文件路径固定 | `{sessions_dir}/{platform}_state.json` |
 | 会话损坏不阻断 | 降级为全新上下文，记录 warning |
 | `stop()` 后一切失效 | 下次需重新 `start()` |
@@ -174,8 +248,7 @@ CdpBrowserManager
 ├── ws_: unique_ptr<ix::WebSocket>      // CDP WebSocket 连接
 ├── cmd_id_: int                        // JSON-RPC 消息 ID 自增
 ├── pending_: map<int, PendingRequest>  // id → (on_ok, on_error) 回调
-├── contexts_: map<string, BrowserContext>  // platform → 上下文缓存
-├── login_pending_: set<string>         // 登录中的平台
+├── contexts_: map<string, unique_ptr<CdpBrowserContext>>  // platform → 上下文
 └── scheduler_: Scheduler*              // 用于 run_blocking / post
 ```
 
@@ -238,30 +311,28 @@ save_session(platform)
   └─ 写入 {platform}_state.json
 ```
 
-### 6.5 登录流程
+### 6.5 打开上下文
 
 ```
-login_flow(platform, url)
-  ├─ get_context(platform)             → 获取/创建平台上下文
-  ├─ CDP Page.navigate(url)            → 打开登录页
-  ├─ CDP Page.addScriptToEvaluateOnNewDocument(stealth.js) → 反检测
-  └─ login_pending_.insert(platform)
-
-                    ↓
-         用户手动在浏览器中登录
-                    ↓
-
-set_login_complete(platform)
-  ├─ save_session(platform)            → 保存 cookies
-  ├─ login_pending_.erase(platform)
-  └─ CDP Page.close                    → 关闭登录页面
+get_context(platform)
+  ├─ if cached: 返回缓存 context
+  ├─ CDP Target.createTarget {url: "about:blank"}
+  ├─ CDP Target.attachToTarget → sessionId
+  ├─ CDP Page.addScriptToEvaluateOnNewDocument(stealth.js)  → 反检测
+  ├─ 缓存: contexts_[platform] = context(sessionId)
+  └─ on_ok(context)
 ```
 
-登录是人工操作，BrowserManager 只负责 "打开页面" 和 "确认完成后的保存"。
+反检测脚本在每次新 document 时自动执行，覆盖 `navigator.webdriver`、`navigator.plugins`、`window.chrome` 等 CDP 特征。
 
-### 6.6 反检测（Stealth）
+### 6.6 上下文关闭
 
-CDP 启动时注入 `Page.addScriptToEvaluateOnNewDocument`，注入反检测 JS（隐藏 webdriver 特征、覆盖 navigator 属性等）。
+```
+context->close()
+  ├─ CDP Target.closeTarget(targetId)
+  ├─ 从 BrowserManager 缓存移除
+  └─ context 指针失效
+```
 
 ---
 
@@ -303,21 +374,22 @@ public:
 | `get_context` 时引擎未启动 | `RuntimeError("not started")` |
 | 会话 JSON 损坏 | 丢弃，全新上下文启动，warning 日志 |
 | `save_session` 时上下文不存在 | `RuntimeError("no context")` |
-| `set_login_complete` 时无 login flow | `RuntimeError("no login flow active")` |
-| 反检测注入失败 | 跳过，warning 日志，继续执行 |
+| `restore_session` 时文件不存在 | `on_done(false)`，非错误 |
+| `context->close()` 后再次调用 | `RuntimeError("already closed")` |
+| CDP 命令超时（> timeout_ms） | `on_error("timeout")`，清理 pending |
+| Chrome 子进程意外退出 | `RuntimeError("chrome process crashed")` |
 
 ---
 
 ## 10. 测试
 
-TA 使用真实 CDP headless Chrome。
+TA 使用真实 CDP headless Chrome（若 Chrome 不存在则 skip）。
 
 | 类型 | 文件 | 覆盖 |
 |------|------|------|
-| UT | `test_browser_models_ut.cpp` | 默认值、自定义、相等性 |
-| UT | `test_browser_factory_ut.cpp` | 创建、配置传递、接口返回 |
-| TA | `test_browser_impl_ta.cpp` | 生命周期、context 管理、session 读写、login flow、反检测 |
+| UT | `test_browser_models_ut.cpp` | BrowserConfig 默认值、序列化、自定义 |
+| TA | `test_browser_ta.cpp` | 生命周期、get_context、navigate、evaluate、screenshot、save/restore_session、close |
 
 ---
 
-*文档版本：v1.2-cpp | 最后更新：2026-05-02*
+*文档版本：v2.0-cpp | 最后更新：2026-05-02*
