@@ -378,18 +378,25 @@ void CdpBrowserManager::launch_chrome(std::string& out_url,
 
 void CdpBrowserManager::on_ws_message(const std::string& data) {
     auto msg = nlohmann::json::parse(data, nullptr, false);
-    if (msg.is_discarded()) return;
+    if (msg.is_discarded()) {
+        LOG_WARN("browser", "on_ws_message: JSON parse failed");
+        return;
+    }
 
     if (msg.contains("id")) {
-        // JSON-RPC 响应
         int id = msg["id"].get<int>();
         auto it = pending_.find(id);
-        if (it == pending_.end()) return;
+        if (it == pending_.end()) {
+            LOG_WARN("browser", "on_ws_message: unknown id=%d", id);
+            return;
+        }
 
         if (msg.contains("error")) {
             auto err = msg["error"]["message"].get<std::string>();
+            LOG_ERROR("browser", "CDP error id=%d: %s", id, err.c_str());
             it->second.on_error(err);
         } else {
+            LOG_INFO("browser", "CDP ok id=%d", id);
             it->second.on_ok(msg["result"]);
         }
         pending_.erase(it);
@@ -523,13 +530,16 @@ void CdpBrowserManager::start() {
 void CdpBrowserManager::stop() {
     if (!started_) return;
 
+    LOG_INFO("browser", "stopping...");
     contexts_.clear();
     ws_.stop();
 
     if (chrome_pid_ > 0) {
+        LOG_INFO("browser", "killing chrome pid %d", chrome_pid_);
         kill(chrome_pid_, SIGTERM);
         int status;
         waitpid(chrome_pid_, &status, 0);
+        LOG_INFO("browser", "chrome exited status=%d", WEXITSTATUS(status));
         chrome_pid_ = -1;
     }
 
@@ -541,8 +551,12 @@ void CdpBrowserManager::stop() {
 
 bool CdpBrowserManager::health_check() {
     if (!started_) return false;
-    if (chrome_crashed_) return false;
+    if (chrome_crashed_) {
+        LOG_WARN("browser", "health: chrome crashed");
+        return false;
+    }
     if (chrome_pid_ > 0 && kill(chrome_pid_, 0) != 0) {
+        LOG_WARN("browser", "health: chrome pid %d dead", chrome_pid_);
         chrome_crashed_ = true;
         return false;
     }
@@ -565,6 +579,7 @@ void CdpBrowserManager::do_get_context(const std::string& platform,
     // 缓存命中
     auto it = contexts_.find(platform);
     if (it != contexts_.end()) {
+        LOG_INFO("browser", "get_context cache hit: platform=%s", platform.c_str());
         on_ok(it->second.get());
         return;
     }
@@ -579,6 +594,8 @@ void CdpBrowserManager::do_get_context(const std::string& platform,
                 {{"targetId", target_id}, {"flatten", true}},
                 [this, platform, target_id, on_ok, on_error](const nlohmann::json& r) {
                     std::string session_id = r["sessionId"].get<std::string>();
+                    LOG_INFO("browser", "attachToTarget ok: platform=%s session=%s",
+                             platform.c_str(), session_id.c_str());
 
                     auto ctx = std::make_unique<CdpBrowserContext>(
                         this, platform, target_id, session_id);
@@ -590,18 +607,20 @@ Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
 window.chrome = {runtime: {}};
 )";
 
+                    auto* raw_ctx = ctx.release();
                     send_command("Page.addScriptToEvaluateOnNewDocument",
                         {{"source", stealth}},
-                        [this, platform, ctx = ctx.release(), on_ok](
+                        [this, platform, raw_ctx, on_ok](
                             const nlohmann::json&) {
-                            auto* raw = ctx;
-                            contexts_[platform].reset(ctx);
-                            on_ok(raw);
+                            contexts_[platform].reset(raw_ctx);
+                            LOG_INFO("browser", "addInitScript ok: platform=%s",
+                                     platform.c_str());
+                            on_ok(raw_ctx);
                         },
-                        [this, platform, target_id, on_error](
-                            const std::string& err) {
-                            // 反检测注入失败不阻断，继续
-                            on_error(err);
+                        [this, platform, raw_ctx](const std::string& err) {
+                            LOG_WARN("browser", "addInitScript error (discarding ctx): %s",
+                                     err.c_str());
+                            delete raw_ctx;
                         },
                         session_id);
 
@@ -612,7 +631,10 @@ window.chrome = {runtime: {}};
                         session_id);
 
                 },
-                on_error,
+                [on_error](const std::string& err) {
+                    LOG_ERROR("browser", "attachToTarget error: %s", err.c_str());
+                    on_error(err);
+                },
                 "");  // attachToTarget 是根级命令，无 sessionId
         },
                 [this, platform, on_error](const std::string& err) {
@@ -650,9 +672,10 @@ void CdpBrowserManager::save_session(const std::string& platform,
 
                     auto dir = config_.sessions_dir;
                     if (!dir.empty() && dir.back() != '/') dir += '/';
-
-                    write_file(dir + platform + "_state.json",
-                               session.dump(2));
+                    auto path = dir + platform + "_state.json";
+                    size_t n = result["cookies"].size();
+                    write_file(path, session.dump(2));
+                    LOG_INFO("browser", "saved %zu cookies to %s", n, path.c_str());
                     on_done();
                 },
                 on_error,
@@ -666,24 +689,34 @@ void CdpBrowserManager::restore_session(const std::string& platform,
     std::function<void(const std::string&)> on_error) {
     auto dir = config_.sessions_dir;
     if (!dir.empty() && dir.back() != '/') dir += '/';
-    auto content = read_file(dir + platform + "_state.json");
+    auto path = dir + platform + "_state.json";
+    auto content = read_file(path);
     if (content.empty()) {
+        LOG_INFO("browser", "restore_session: no file at %s", path.c_str());
         on_done(false);
         return;
     }
 
     auto session = nlohmann::json::parse(content, nullptr, false);
     if (session.is_discarded() || !session.contains("cookies")) {
+        LOG_WARN("browser", "restore_session: invalid session file %s", path.c_str());
         on_done(false);
         return;
     }
 
+    size_t n = session["cookies"].size();
     do_get_context(platform,
-        [this, session, on_done, on_error](CdpBrowserContext* ctx) {
+        [this, session, on_done, on_error, n, path](CdpBrowserContext* ctx) {
             send_command("Storage.setCookies",
                 {{"cookies", session["cookies"]}},
-                [on_done](const nlohmann::json&) { on_done(true); },
-                on_error,
+                [on_done, n, path](const nlohmann::json&) {
+                    LOG_INFO("browser", "restored %zu cookies from %s", n, path.c_str());
+                    on_done(true);
+                },
+                [on_error, path](const std::string& err) {
+                    LOG_ERROR("browser", "restore_session: setCookies error: %s", err.c_str());
+                    on_error(err);
+                },
                 ctx->session_id());
         },
         [on_error](const std::string& err) { on_error(err); });
