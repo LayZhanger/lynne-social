@@ -1,37 +1,45 @@
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.egg-info/
-dist/
+# Lynne C++ build artifacts
+
+# Build directories
 build/
-*.egg
+dist/
 
-# Virtual environment
-.venv/
+# Object files
+*.o
+*.obj
+*.a
+*.so
+*.dylib
 
-# Test / coverage
-.coverage
-.pytest_cache/
-.coverage.*
-
-# Type checking / linting
-.mypy_cache/
-.ruff_cache/
-
-# Node (for .opencode plugins)
-.opencode/node_modules/
-.opencode/bun.lock
+# Executables
+*.exe
 
 # IDE
-.idea/
 .vscode/
+.idea/
+CMakeLists.txt.user
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# Temporary files
+*.tmp
+*.log
 *.swp
 *.swo
+*~
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Data (runtime generated, may contain secrets)
+# Data directories (runtime)
 data/
+sessions/
+
+# Third-party build output
+third_party/build/
+*.state.json
