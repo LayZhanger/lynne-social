@@ -90,6 +90,19 @@ void UvScheduler::remove_job(const std::string& name) {
     }
 }
 
+void UvScheduler::after(uint64_t delay_ms,
+                         std::function<void()> callback) {
+    // Reuse add_job, but make it oneshot (fires once then auto-removes)
+    static std::atomic<int> counter{0};
+    std::string name = "_a_" + std::to_string(++counter);
+    remove_job(name);
+    auto* ctx = new TimerCtx{name, std::move(callback), &timers_, {}};
+    uv_timer_init(uv_default_loop(), &ctx->handle);
+    ctx->handle.data = ctx;
+    timers_[name] = ctx;
+    uv_timer_start(&ctx->handle, oneshot_timer_cb, delay_ms, 0);
+}
+
 void UvScheduler::step() {
     uv_run(uv_default_loop(), UV_RUN_NOWAIT);
 }
@@ -145,6 +158,17 @@ void UvScheduler::timer_cb(uv_timer_t* handle) {
             ctx->callback();
         } catch (...) {}
     }
+}
+
+void UvScheduler::oneshot_timer_cb(uv_timer_t* handle) {
+    auto* ctx = static_cast<TimerCtx*>(handle->data);
+    if (ctx->callback) {
+        try { ctx->callback(); } catch (...) {}
+    }
+    uv_timer_stop(handle);
+    // Self-remove from owner map
+    if (ctx->owner) ctx->owner->erase(ctx->name);
+    uv_close((uv_handle_t*)handle, timer_close_cb);
 }
 
 void UvScheduler::timer_close_cb(uv_handle_t* handle) {

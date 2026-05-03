@@ -138,7 +138,10 @@ CdpBrowserContext::CdpBrowserContext(CdpBrowserManager* manager,
     , target_id_(target_id)
     , session_id_(session_id) {}
 
-CdpBrowserContext::~CdpBrowserContext() = default;
+CdpBrowserContext::~CdpBrowserContext() {
+    for (auto& g : after_guards_) *g = false;
+    after_guards_.clear();
+}
 
 void CdpBrowserContext::navigate(const std::string& url,
     std::function<void()> on_loaded,
@@ -407,6 +410,16 @@ void CdpBrowserContext::wait_for_selector(const std::string& css_selector,
             });
     };
     manager_->scheduler()->post(*check);
+}
+
+void CdpBrowserContext::after(uint64_t delay_ms,
+                               std::function<void()> callback) {
+    auto alive = std::make_shared<bool>(true);
+    manager_->scheduler()->after(delay_ms, [alive, cb = std::move(callback)]() {
+        if (*alive) cb();
+    });
+    // Store guard; destructor sets *alive = false
+    after_guards_.push_back(std::move(alive));
 }
 
 // ============================================================

@@ -4,6 +4,7 @@
 #include "wheel/scheduler/scheduler_models.h"
 
 #include <uv.h>
+#include <atomic>
 #include <mutex>
 #include <vector>
 #include <map>
@@ -33,6 +34,8 @@ public:
         std::function<void()> callback
     ) override;
     void remove_job(const std::string& name) override;
+    void after(uint64_t delay_ms,
+               std::function<void()> callback) override;
     void step() override;
     void run() override;
 
@@ -55,6 +58,7 @@ private:
     static void after_work_cb(uv_work_t* req, int status);
     static void async_cb(uv_async_t* handle);
     static void timer_cb(uv_timer_t* handle);
+    static void oneshot_timer_cb(uv_timer_t* handle);
     static void timer_close_cb(uv_handle_t* handle);
 
     SchedulerConfig config_;

@@ -6,6 +6,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <unistd.h>
 #include <filesystem>
 #include <string>
 #include <thread>
@@ -38,12 +39,27 @@ static bool test_chrome_available() {
            system("which chromium-browser >/dev/null 2>&1") == 0;
 }
 
-static void run_loop(BrowserManager* browser, std::atomic<bool>& done,
-                     int max_iters = 300) {
-    for (int i = 0; i < max_iters && !done; ++i) {
+static void pump(BrowserManager* browser, std::atomic<bool>& done,
+                  int max_ms = 7500) {
+    auto t0 = std::chrono::steady_clock::now();
+    while (!done) {
         browser->step();
-        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        usleep(5000);
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count() >= max_ms) break;
     }
+}
+
+static bool wait_started(BrowserManager* b) {
+    std::atomic<bool> ok{false};
+    auto t0 = std::chrono::steady_clock::now();
+    while (!ok) {
+        b->step(); usleep(5000);
+        ok = b->health_check();
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count() >= 10000) break;
+    }
+    return ok;
 }
 
 int main() {
@@ -52,7 +68,6 @@ int main() {
         return 0;
     }
 
-    // 初始化标准日志，让浏览器模块的 LOG_* 输出可见
     g_logger_ptr = LoggerFactory().create({"INFO"});
     g_logger_ptr->start();
 
@@ -64,13 +79,7 @@ int main() {
         CHECK_FALSE(browser->health_check(), "health false before start");
 
         browser->start();
-        std::atomic<bool> started{false};
-        for (int i = 0; i < 80 && !started; ++i) {
-            browser->step();
-            started = browser->health_check();
-            std::this_thread::sleep_for(std::chrono::milliseconds(25));
-        }
-        CHECK_TRUE(started, "start ok");
+        CHECK_TRUE(wait_started(browser), "browser started");
 
         browser->stop();
         CHECK_FALSE(browser->health_check(), "health false after stop");
@@ -84,24 +93,12 @@ int main() {
     {
         auto* browser = BrowserFactory().create(BrowserConfig{});
         browser->start();
-        std::atomic<bool> started{false};
-        for (int i = 0; i < 80 && !started; ++i) {
-            browser->step();
-            started = browser->health_check();
-            std::this_thread::sleep_for(std::chrono::milliseconds(25));
-        }
-        CHECK_TRUE(started, "first start");
+        CHECK_TRUE(wait_started(browser), "browser started");
         browser->stop();
         CHECK_FALSE(browser->health_check(), "stopped");
 
         browser->start();
-        started = false;
-        for (int i = 0; i < 80 && !started; ++i) {
-            browser->step();
-            started = browser->health_check();
-            std::this_thread::sleep_for(std::chrono::milliseconds(25));
-        }
-        CHECK_TRUE(started, "restart ok");
+        CHECK_TRUE(wait_started(browser), "restart ok");
         browser->stop();
         delete browser;
     }
@@ -128,12 +125,7 @@ int main() {
     {
         auto* browser = BrowserFactory().create(BrowserConfig{});
         browser->start();
-        std::atomic<bool> started{false};
-        for (int i = 0; i < 80 && !started; ++i) {
-            browser->step();
-            started = browser->health_check();
-            std::this_thread::sleep_for(std::chrono::milliseconds(25));
-        }
+        CHECK_TRUE(wait_started(browser), "browser started");
 
         std::atomic<bool> done{false};
         std::string title, url;
@@ -158,7 +150,7 @@ int main() {
             },
             [&](const std::string&) { done = true; });
 
-        run_loop(browser, done);
+        pump(browser, done);
         CHECK_TRUE(!title.empty(), "title not empty");
         CHECK_TRUE(title == "TA", "title is TA");
         CHECK_TRUE(url.find("data:text/html") != std::string::npos,
@@ -174,12 +166,7 @@ int main() {
     {
         auto* browser = BrowserFactory().create(BrowserConfig{});
         browser->start();
-        std::atomic<bool> started{false};
-        for (int i = 0; i < 80 && !started; ++i) {
-            browser->step();
-            started = browser->health_check();
-            std::this_thread::sleep_for(std::chrono::milliseconds(25));
-        }
+        CHECK_TRUE(wait_started(browser), "browser started");
 
         std::atomic<bool> done{false};
         BrowserContext* first = nullptr;
@@ -212,7 +199,7 @@ int main() {
             },
             [&](const std::string&) { done = true; });
 
-        run_loop(browser, done);
+        pump(browser, done);
         CHECK_TRUE(first != nullptr, "first non-null");
         CHECK_TRUE(after != nullptr, "after non-null");
         CHECK_TRUE(first != after, "close+reopen: different ptr");
@@ -227,12 +214,7 @@ int main() {
     {
         auto* browser = BrowserFactory().create(BrowserConfig{});
         browser->start();
-        std::atomic<bool> started{false};
-        for (int i = 0; i < 80 && !started; ++i) {
-            browser->step();
-            started = browser->health_check();
-            std::this_thread::sleep_for(std::chrono::milliseconds(25));
-        }
+        CHECK_TRUE(wait_started(browser), "browser started");
 
         std::atomic<bool> done{false};
         BrowserContext* a = nullptr;
@@ -250,7 +232,7 @@ int main() {
             },
             [&](const std::string&) { done = true; });
 
-        run_loop(browser, done);
+        pump(browser, done);
         CHECK_TRUE(a != nullptr, "plat_a non-null");
         CHECK_TRUE(b != nullptr, "plat_b non-null");
         CHECK_TRUE(a != b, "different platforms → different ctx");
@@ -265,12 +247,7 @@ int main() {
     {
         auto* browser = BrowserFactory().create(BrowserConfig{});
         browser->start();
-        std::atomic<bool> started{false};
-        for (int i = 0; i < 80 && !started; ++i) {
-            browser->step();
-            started = browser->health_check();
-            std::this_thread::sleep_for(std::chrono::milliseconds(25));
-        }
+        CHECK_TRUE(wait_started(browser), "browser started");
 
         std::atomic<bool> done{false};
         int sum = 0;
@@ -287,7 +264,7 @@ int main() {
             },
             [&](const std::string&) { done = true; });
 
-        run_loop(browser, done);
+        pump(browser, done);
         CHECK_TRUE(sum == 2, "send_command 1+1=2");
         browser->stop();
         delete browser;
@@ -303,12 +280,7 @@ int main() {
         std::filesystem::create_directories("/tmp/lynne_browser_test");
         auto* browser = BrowserFactory().create(cfg);
         browser->start();
-        std::atomic<bool> started{false};
-        for (int i = 0; i < 80 && !started; ++i) {
-            browser->step();
-            started = browser->health_check();
-            std::this_thread::sleep_for(std::chrono::milliseconds(25));
-        }
+        CHECK_TRUE(wait_started(browser), "browser started");
 
         std::atomic<bool> done{false};
         bool restore_empty = false;
@@ -323,15 +295,14 @@ int main() {
                     [&](BrowserContext* ctx) {
                         ctx->navigate("data:text/html,<title>S</title>",
                             [&, ctx]() {
-                                browser->step();
-                                std::this_thread::sleep_for(
-                                    std::chrono::milliseconds(200));
-                                browser->save_session("sess_test",
-                                    [&]() {
-                                        saved = true;
-                                        done = true;
-                                    },
-                                    [&](const std::string&) { done = true; });
+                                ctx->after(200, [&]() {
+                                    browser->save_session("sess_test",
+                                        [&]() {
+                                            saved = true;
+                                            done = true;
+                                        },
+                                        [&](const std::string&) { done = true; });
+                                });
                             },
                             [&](const std::string&) { done = true; });
                     },
@@ -339,7 +310,7 @@ int main() {
             },
             [&](const std::string&) { done = true; });
 
-        run_loop(browser, done, 400);
+        pump(browser, done, 10000);
         CHECK_TRUE(restore_empty, "restore: false when no file");
         CHECK_TRUE(saved, "save: ok");
 
@@ -361,12 +332,7 @@ int main() {
     {
         auto* browser = BrowserFactory().create(BrowserConfig{});
         browser->start();
-        std::atomic<bool> started{false};
-        for (int i = 0; i < 80 && !started; ++i) {
-            browser->step();
-            started = browser->health_check();
-            std::this_thread::sleep_for(std::chrono::milliseconds(25));
-        }
+        CHECK_TRUE(wait_started(browser), "browser started");
 
         std::atomic<bool> done{false};
         std::string title;
@@ -375,21 +341,20 @@ int main() {
             [&](BrowserContext* ctx) {
                 ctx->navigate("https://www.baidu.com/",
                     [&, ctx]() {
-                        // wait for page to render
-                        std::this_thread::sleep_for(
-                            std::chrono::milliseconds(3000));
-                        ctx->evaluate("document.title",
-                            [&](nlohmann::json r) {
-                                title = r["value"].get<std::string>();
-                                done = true;
-                            },
-                            [&](const std::string&) { done = true; });
+                        ctx->after(3000, [&, ctx]() {
+                            ctx->evaluate("document.title",
+                                [&](nlohmann::json r) {
+                                    title = r["value"].get<std::string>();
+                                    done = true;
+                                },
+                                [&](const std::string&) { done = true; });
+                        });
                     },
                     [&](const std::string&) { done = true; });
             },
             [&](const std::string&) { done = true; });
 
-        run_loop(browser, done, 600);
+        pump(browser, done, 15000);
         CHECK_TRUE(!title.empty(), "baidu: title not empty");
         CHECK_TRUE(title.find("百度") != std::string::npos,
                    "baidu: title contains 百度");

@@ -7,6 +7,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <unistd.h>
 #include <filesystem>
 #include <string>
 #include <thread>
@@ -36,14 +37,18 @@ static bool test_chrome_available() {
            system("which chromium-browser >/dev/null 2>&1") == 0;
 }
 
-static void run_loop(BrowserManager* b, std::atomic<bool>& done, int n = 600) {
-    for (int i = 0; i < n && !done; ++i) { b->step(); std::this_thread::sleep_for(std::chrono::milliseconds(25)); }
-    if (!done) printf("  [WARN] run_loop timeout (%d)\n", n);
+static void pump(BrowserManager* b, std::atomic<bool>& done, int max_ms = 15000) {
+    auto t0 = std::chrono::steady_clock::now();
+    while (!done) { b->step(); usleep(5000); if (std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0).count() >= max_ms) break; }
+    if (!done) printf("  [WARN] pump timeout (%dms)\n", max_ms);
 }
 
 static bool wait_started(BrowserManager* b) {
     std::atomic<bool> ok{false};
-    for (int i = 0; i < 120 && !ok; ++i) { b->step(); ok = b->health_check(); std::this_thread::sleep_for(std::chrono::milliseconds(25)); }
+    auto t0 = std::chrono::steady_clock::now();
+    while (!ok) { b->step(); usleep(5000); ok = b->health_check(); if (std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0).count() >= 3000) break; }
     return ok;
 }
 
@@ -67,12 +72,20 @@ int main() {
                 },
                 [&](const std::string&) { done = true; });
         }, [&](const std::string&) { done = true; });
-        run_loop(b, done, 100);
+        pump(b, done, 100);
     }
     report("Navigate");
 
-    // 给 SPA 充分时间渲染
-    for (int i = 0; i < 320; ++i) { b->step(); std::this_thread::sleep_for(std::chrono::milliseconds(100)); }
+    // 等 SPA 渲染完
+    {
+        std::atomic<bool> done{false};
+        b->get_context("xhs", [&](BrowserContext* ctx) {
+            ctx->wait_for_selector("a, input, button", 30000,
+                [&]() { done = true; },
+                [&](const std::string&) { done = true; });
+        }, [&](const std::string&) { done = true; });
+        pump(b, done, 35000);
+    }
 
     // ============================================================
     // 2. dump_page_structure
@@ -88,7 +101,7 @@ int main() {
                 },
                 [&](const std::string&) { done = true; });
         }, [&](const std::string&) { done = true; });
-        run_loop(b, done);
+        pump(b, done);
     }
     report("DumpStructure");
 
@@ -102,7 +115,7 @@ int main() {
                 [&](bool f) { CHECK_TRUE(f, "exists: page has interactive elements"); done = true; },
                 [&](const std::string&) { done = true; });
         }, [&](const std::string&) { done = true; });
-        run_loop(b, done);
+        pump(b, done);
 
         done = false;
         b->get_context("xhs", [&](BrowserContext* ctx) {
@@ -110,7 +123,7 @@ int main() {
                 [&](bool f) { CHECK_TRUE(f, "exists: login-related element"); done = true; },
                 [&](const std::string&) { done = true; });
         }, [&](const std::string&) { done = true; });
-        run_loop(b, done);
+        pump(b, done);
     }
     report("Exists");
 
@@ -134,7 +147,7 @@ int main() {
                 },
                 [&](const std::string&) { done = true; });
         }, [&](const std::string&) { done = true; });
-        run_loop(b, done);
+        pump(b, done);
         if (typed) CHECK_TRUE(true, "type: input found and filled");
         else printf("  [NOTE] type: no text input available\n");
     }
@@ -148,7 +161,7 @@ int main() {
                 [&]() { done = true; },
                 [&](const std::string&) { done = true; });
         }, [&](const std::string&) { done = true; });
-        run_loop(b, done);
+        pump(b, done);
 
         done = false;
         double offset = 0;
@@ -157,7 +170,7 @@ int main() {
                 if (r.contains("value") && !r["value"].is_null()) offset = r["value"].get<double>(); done = true;
             }, [&](const std::string&) { done = true; });
         }, [&](const std::string&) { done = true; });
-        run_loop(b, done);
+        pump(b, done);
         CHECK_TRUE(true, "scroll: exercised");  // 只要不 crash 就 PASS
     }
     report("Scroll");
@@ -173,7 +186,7 @@ int main() {
                     done = true;
                 });
         }, [&](const std::string&) { done = true; });
-        run_loop(b, done);
+        pump(b, done);
     }
     report("Hover");
 
@@ -191,7 +204,7 @@ int main() {
                 [&]() { ok = true; done = true; },
                 [&](const std::string&) { done = true; });
         }, [&](const std::string&) { done = true; });
-        run_loop(b, done, 800);
+        pump(b, done, 800);
         if (ok) {
             CHECK_TRUE(true, "screenshot: callback");
             bool ex = std::filesystem::exists(shot);

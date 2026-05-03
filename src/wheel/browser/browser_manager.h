@@ -79,6 +79,9 @@ public:
         uint64_t timeout_ms,
         std::function<void()> on_found,
         std::function<void(const std::string&)> on_timeout) = 0;
+
+    virtual void after(uint64_t delay_ms,
+                       std::function<void()> callback) = 0;
 };
 
 // ============================================================

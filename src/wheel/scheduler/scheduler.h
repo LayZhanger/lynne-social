@@ -25,6 +25,9 @@ public:
 
     virtual void remove_job(const std::string& name) = 0;
 
+    virtual void after(uint64_t delay_ms,
+                       std::function<void()> callback) = 0;
+
     virtual void step() = 0;
     virtual void run() = 0;
 };

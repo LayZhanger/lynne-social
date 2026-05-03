@@ -6,6 +6,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <unistd.h>
 #include <string>
 #include <thread>
 #include <chrono>
@@ -34,14 +35,18 @@ static bool test_chrome_available() {
            system("which chromium-browser >/dev/null 2>&1") == 0;
 }
 
-static void run_loop(BrowserManager* b, std::atomic<bool>& done, int n = 300) {
-    for (int i = 0; i < n && !done; ++i) { b->step(); std::this_thread::sleep_for(std::chrono::milliseconds(25)); }
-    if (!done) printf("  [WARN] run_loop timeout (%d)\n", n);
+static void pump(BrowserManager* b, std::atomic<bool>& done, int max_ms = 7500) {
+    auto t0 = std::chrono::steady_clock::now();
+    while (!done) { b->step(); usleep(5000); if (std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0).count() >= max_ms) break; }
+    if (!done) printf("  [WARN] pump timeout (%dms)\n", max_ms);
 }
 
 static bool wait_started(BrowserManager* b) {
     std::atomic<bool> ok{false};
-    for (int i = 0; i < 120 && !ok; ++i) { b->step(); ok = b->health_check(); std::this_thread::sleep_for(std::chrono::milliseconds(25)); }
+    auto t0 = std::chrono::steady_clock::now();
+    while (!ok) { b->step(); usleep(5000); ok = b->health_check(); if (std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0).count() >= 3000) break; }
     return ok;
 }
 
@@ -81,7 +86,7 @@ int main() {
                 )JS", [&](nlohmann::json) { done = true; }, [&](const std::string&) { done = true; });
             }, [&](const std::string&) { done = true; });
         }, [&](const std::string&) { done = true; });
-        run_loop(b, done, 200);
+        pump(b, done, 200);
     }
 
     // ============================================================
@@ -94,7 +99,7 @@ int main() {
                 [&]() { done = true; },
                 [&](const std::string&) { CHECK_TRUE(true, "click missing → on_error"); done = true; });
         }, [&](const std::string&) { done = true; });
-        run_loop(b, done);
+        pump(b, done);
 
         done = false;
         b->get_context("edge", [&](BrowserContext* ctx) {
@@ -102,7 +107,7 @@ int main() {
                 [&]() { done = true; },
                 [&](const std::string&) { CHECK_TRUE(true, "type missing → on_error"); done = true; });
         }, [&](const std::string&) { done = true; });
-        run_loop(b, done);
+        pump(b, done);
 
         done = false;
         b->get_context("edge", [&](BrowserContext* ctx) {
@@ -110,7 +115,7 @@ int main() {
                 [&]() { done = true; },
                 [&](const std::string&) { CHECK_TRUE(true, "hover missing → on_error"); done = true; });
         }, [&](const std::string&) { done = true; });
-        run_loop(b, done);
+        pump(b, done);
     }
     report("ErrorPaths");
 
@@ -133,7 +138,7 @@ int main() {
                 },
                 [&](const std::string&) { done = true; });
         }, [&](const std::string&) { done = true; });
-        run_loop(b, done);
+        pump(b, done);
 
         // 中文 + emoji
         done = false;
@@ -150,7 +155,7 @@ int main() {
                 },
                 [&](const std::string&) { done = true; });
         }, [&](const std::string&) { done = true; });
-        run_loop(b, done);
+        pump(b, done);
     }
     report("TypeSpecialChars");
 
@@ -172,7 +177,7 @@ int main() {
                 },
                 [&](const std::string&) { done = true; });
         }, [&](const std::string&) { done = true; });
-        run_loop(b, done);
+        pump(b, done);
     }
     report("ClickButtonEvent");
 
@@ -194,7 +199,7 @@ int main() {
                 },
                 [&](const std::string&) { done = true; });
         }, [&](const std::string&) { done = true; });
-        run_loop(b, done);
+        pump(b, done);
     }
     report("HoverEvent");
 
@@ -207,7 +212,7 @@ int main() {
             ctx->exists("div, span", [&](bool f) { CHECK_TRUE(f, "exists: div,span→true"); done = true; },
                 [&](const std::string&) { done = true; });
         }, [&](const std::string&) { done = true; });
-        run_loop(b, done);
+        pump(b, done);
 
         done = false;
         b->get_context("edge", [&](BrowserContext* ctx) {
@@ -218,7 +223,7 @@ int main() {
                 },
                 [&](const std::string&) { done = true; });
         }, [&](const std::string&) { done = true; });
-        run_loop(b, done);
+        pump(b, done);
 
         done = false;
         b->get_context("edge", [&](BrowserContext* ctx) {
@@ -229,7 +234,7 @@ int main() {
                 },
                 [&](const std::string&) { done = true; });
         }, [&](const std::string&) { done = true; });
-        run_loop(b, done);
+        pump(b, done);
     }
     report("ExistsComplex");
 
@@ -242,14 +247,14 @@ int main() {
         b->get_context("edge", [&](BrowserContext* ctx) {
             ctx->evaluate("window.scrollTo(0,0)", [&](nlohmann::json) { done = true; }, [&](const std::string&) { done = true; });
         }, [&](const std::string&) { done = true; });
-        run_loop(b, done);
+        pump(b, done);
 
         // 垂直
         done = false;
         b->get_context("edge", [&](BrowserContext* ctx) {
             ctx->scroll(0, 300, [&]() { done = true; }, [&](const std::string&) { done = true; });
         }, [&](const std::string&) { done = true; });
-        run_loop(b, done);
+        pump(b, done);
 
         double scrollY = 0;
         done = false;
@@ -258,7 +263,7 @@ int main() {
                 if (r.contains("value") && !r["value"].is_null()) scrollY = r["value"].get<double>(); done = true;
             }, [&](const std::string&) { done = true; });
         }, [&](const std::string&) { done = true; });
-        run_loop(b, done);
+        pump(b, done);
         CHECK_TRUE(scrollY > 100, "scroll vertical: > 100");
 
         // 水平
@@ -266,7 +271,7 @@ int main() {
         b->get_context("edge", [&](BrowserContext* ctx) {
             ctx->scroll(200, 0, [&]() { done = true; }, [&](const std::string&) { done = true; });
         }, [&](const std::string&) { done = true; });
-        run_loop(b, done);
+        pump(b, done);
 
         double scrollX = 0;
         done = false;
@@ -275,7 +280,7 @@ int main() {
                 if (r.contains("value") && !r["value"].is_null()) scrollX = r["value"].get<double>(); done = true;
             }, [&](const std::string&) { done = true; });
         }, [&](const std::string&) { done = true; });
-        run_loop(b, done);
+        pump(b, done);
         CHECK_TRUE(scrollX > 50, "scroll horizontal: > 50");
     }
     report("ScrollMultiDir");
@@ -290,7 +295,7 @@ int main() {
                 [&]() { CHECK_TRUE(true, "press_key: Tab sent"); done = true; },
                 [&](const std::string&) { done = true; });
         }, [&](const std::string&) { done = true; });
-        run_loop(b, done);
+        pump(b, done);
     }
     report("PressKeyTab");
 
@@ -304,7 +309,7 @@ int main() {
                 [&]() { CHECK_TRUE(true, "wait: immediate find"); done = true; },
                 [&](const std::string&) { done = true; });
         }, [&](const std::string&) { done = true; });
-        run_loop(b, done, 30);
+        pump(b, done, 30);
 
         done = false;
         b->get_context("edge", [&](BrowserContext* ctx) {
@@ -312,7 +317,7 @@ int main() {
                 [&]() { done = true; },
                 [&](const std::string&) { CHECK_TRUE(true, "wait: timeout on missing"); done = true; });
         }, [&](const std::string&) { done = true; });
-        run_loop(b, done, 200);
+        pump(b, done, 200);
     }
     report("WaitForSelectorEdge");
 
@@ -330,7 +335,7 @@ int main() {
                 [&]() { ok = true; done = true; },
                 [&](const std::string&) { done = true; });
         }, [&](const std::string&) { done = true; });
-        run_loop(b, done);
+        pump(b, done);
         CHECK_TRUE(ok, "screenshot: callback");
         bool ex = std::filesystem::exists(shot);
         CHECK_TRUE(ex, "screenshot: file exists");

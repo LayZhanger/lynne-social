@@ -6,6 +6,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <unistd.h>
 #include <filesystem>
 #include <string>
 #include <thread>
@@ -37,25 +38,28 @@ static bool test_chrome_available() {
            system("which chromium-browser >/dev/null 2>&1") == 0;
 }
 
-static void run_loop(BrowserManager* browser, std::atomic<bool>& done,
-                     int max_iters = 800) {
-    for (int i = 0; i < max_iters && !done; ++i) {
+static void pump(BrowserManager* browser, std::atomic<bool>& done,
+                  int max_ms = 20000) {
+    auto t0 = std::chrono::steady_clock::now();
+    while (!done) {
         browser->step();
-        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        usleep(5000);
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count() >= max_ms) break;
     }
-    if (!done) {
-        printf("  [WARN] run_loop timeout (%d iters)\n", max_iters);
-    }
+    if (!done) printf("  [WARN] pump timeout (%dms)\n", max_ms);
 }
 
-static bool wait_started(BrowserManager* browser, int max_iters = 120) {
-    std::atomic<bool> started{false};
-    for (int i = 0; i < max_iters && !started; ++i) {
+static bool wait_started(BrowserManager* browser, int max_ms = 3000) {
+    std::atomic<bool> ok{false};
+    auto t0 = std::chrono::steady_clock::now();
+    while (!ok) {
         browser->step();
-        started = browser->health_check();
-        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        ok = browser->health_check();
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count() >= max_ms) break;
     }
-    return started;
+    return ok;
 }
 
 int main() {
@@ -87,7 +91,7 @@ int main() {
                     [&](const std::string&) { done = true; });
             },
             [&](const std::string&) { done = true; });
-        run_loop(browser, done, 600);
+        pump(browser, done, 600);
 
         done = false;
         browser->get_context("human",
@@ -100,7 +104,7 @@ int main() {
                     [&](const std::string&) { done = true; });
             },
             [&](const std::string&) { done = true; });
-        run_loop(browser, done);
+        pump(browser, done);
 
         done = false;
         browser->get_context("human",
@@ -113,7 +117,7 @@ int main() {
                     [&](const std::string&) { done = true; });
             },
             [&](const std::string&) { done = true; });
-        run_loop(browser, done);
+        pump(browser, done);
     }
     report("Exists");
 
@@ -132,7 +136,7 @@ int main() {
                     });
             },
             [&](const std::string&) { done = true; });
-        run_loop(browser, done);
+        pump(browser, done);
 
         done = false;
         std::string input_val;
@@ -147,7 +151,7 @@ int main() {
                     [&](const std::string&) { done = true; });
             },
             [&](const std::string&) { done = true; });
-        run_loop(browser, done);
+        pump(browser, done);
         CHECK_TRUE(input_val.find("opencode") != std::string::npos,
                    "type: input contains 'opencode'");
     }
@@ -183,7 +187,7 @@ int main() {
                     [&](const std::string&) { done = true; });
             },
             [&](const std::string&) { done = true; });
-        run_loop(browser, done, 600);
+        pump(browser, done, 600);
 
         // 验证页面导航了
         done = false;
@@ -198,7 +202,7 @@ int main() {
                     [&](const std::string&) { done = true; });
             },
             [&](const std::string&) { done = true; });
-        run_loop(browser, done);
+        pump(browser, done);
         CHECK_TRUE(cur_url.find("click_test") != std::string::npos,
                    "click: navigated to link target");
     }
@@ -216,7 +220,7 @@ int main() {
                     [&](const std::string&) { done = true; });
             },
             [&](const std::string&) { done = true; });
-        run_loop(browser, done);
+        pump(browser, done);
         CHECK_TRUE(true, "press_key: Enter sent");
     }
     report("PressKey");
@@ -248,7 +252,7 @@ int main() {
                     [&](const std::string&) { done = true; });
             },
             [&](const std::string&) { done = true; });
-        run_loop(browser, done);
+        pump(browser, done);
 
         // 验证 hover 触发
         done = false;
@@ -265,7 +269,7 @@ int main() {
                     [&](const std::string&) { done = true; });
             },
             [&](const std::string&) { done = true; });
-        run_loop(browser, done);
+        pump(browser, done);
         CHECK_TRUE(hovered == "yes", "hover: mouseover event fired");
     }
     report("Hover");
@@ -294,7 +298,7 @@ int main() {
                     [&](const std::string&) { done = true; });
             },
             [&](const std::string&) { done = true; });
-        run_loop(browser, done);
+        pump(browser, done);
 
         done = false;
         browser->get_context("human",
@@ -304,7 +308,7 @@ int main() {
                     [&](const std::string&) { done = true; });
             },
             [&](const std::string&) { done = true; });
-        run_loop(browser, done);
+        pump(browser, done);
 
         done = false;
         double offset = 0;
@@ -319,7 +323,7 @@ int main() {
                     [&](const std::string&) { done = true; });
             },
             [&](const std::string&) { done = true; });
-        run_loop(browser, done);
+        pump(browser, done);
         CHECK_TRUE(offset > 100, "scroll down: pageYOffset > 100");
 
         done = false;
@@ -330,7 +334,7 @@ int main() {
                     [&](const std::string&) { done = true; });
             },
             [&](const std::string&) { done = true; });
-        run_loop(browser, done);
+        pump(browser, done);
 
         done = false;
         double offset2 = 0;
@@ -345,7 +349,7 @@ int main() {
                     [&](const std::string&) { done = true; });
             },
             [&](const std::string&) { done = true; });
-        run_loop(browser, done);
+        pump(browser, done);
         CHECK_TRUE(offset2 < offset || offset2 < offset + 50,
                    "scroll up: pageYOffset decreased");
     }
@@ -375,7 +379,7 @@ int main() {
                     [&](const std::string&) { done = true; });
             },
             [&](const std::string&) { done = true; });
-        run_loop(browser, done, 600);
+        pump(browser, done, 600);
 
         // 等待不存在的元素 → 超时
         done = false;
@@ -390,7 +394,7 @@ int main() {
                     });
             },
             [&](const std::string&) { done = true; });
-        run_loop(browser, done, 300);
+        pump(browser, done, 300);
     }
     report("WaitForSelector");
 
@@ -410,7 +414,7 @@ int main() {
                     [&](const std::string&) { done = true; });
             },
             [&](const std::string&) { done = true; });
-        run_loop(browser, done);
+        pump(browser, done);
     }
     report("SendCommand");
 
@@ -434,7 +438,7 @@ int main() {
                     [&](const std::string&) { done = true; });
             },
             [&](const std::string&) { done = true; });
-        run_loop(browser, done);
+        pump(browser, done);
 
         CHECK_TRUE(ok, "screenshot: callback fired");
         bool file_exists = std::filesystem::exists(shot_path);

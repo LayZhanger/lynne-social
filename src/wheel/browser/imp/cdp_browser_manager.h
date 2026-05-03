@@ -92,12 +92,16 @@ public:
         std::function<void()> on_found,
         std::function<void(const std::string&)> on_timeout) override;
 
+    void after(uint64_t delay_ms,
+               std::function<void()> callback) override;
+
 private:
     class CdpBrowserManager* manager_;
     std::string platform_;
     std::string target_id_;
     std::string session_id_;
     bool closed_ = false;
+    std::vector<std::shared_ptr<bool>> after_guards_;
 };
 
 // ============================================================
