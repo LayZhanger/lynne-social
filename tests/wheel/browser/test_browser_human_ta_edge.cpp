@@ -316,6 +316,29 @@ int main() {
     }
     report("WaitForSelectorEdge");
 
+    // ============================================================
+    // 9. screenshot /tmp/lynne_edge.png
+    // ============================================================
+    {
+        std::string shot = "/tmp/lynne_edge.png";
+        std::error_code ec;
+        std::filesystem::remove(shot, ec);
+        std::atomic<bool> done{false};
+        bool ok = false;
+        b->get_context("edge", [&](BrowserContext* ctx) {
+            ctx->screenshot(shot,
+                [&]() { ok = true; done = true; },
+                [&](const std::string&) { done = true; });
+        }, [&](const std::string&) { done = true; });
+        run_loop(b, done);
+        CHECK_TRUE(ok, "screenshot: callback");
+        bool ex = std::filesystem::exists(shot);
+        CHECK_TRUE(ex, "screenshot: file exists");
+        if (ex) { auto sz = std::filesystem::file_size(shot); CHECK_TRUE(sz > 1000, "screenshot: > 1KB"); }
+        std::filesystem::remove(shot, ec);
+    }
+    report("Screenshot");
+
     b->stop(); delete b;
     printf("\n=== ALL TESTS DONE ===\n");
     return 0;

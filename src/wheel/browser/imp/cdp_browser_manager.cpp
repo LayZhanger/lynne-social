@@ -498,6 +498,8 @@ void CdpBrowserManager::launch_chrome(std::string& out_url,
                "--disable-gpu",
                "--no-sandbox",
                "--disable-dev-shm-usage",
+               "--disable-blink-features=AutomationControlled",
+               "--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
                "--remote-allow-origins=*",
                "--remote-debugging-address=127.0.0.1",
                "--remote-debugging-port=0",
@@ -803,8 +805,22 @@ void CdpBrowserManager::do_get_context(const std::string& platform,
                     // 注入反检测脚本
                     std::string stealth = R"(
 Object.defineProperty(navigator, 'webdriver', {get: () => false});
-Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
-window.chrome = {runtime: {}};
+var pp=Object.getPrototypeOf(navigator.plugins);
+Object.defineProperty(navigator, 'plugins', {
+    get: () => {
+        var p1={name:'Chrome PDF Plugin',filename:'internal-pdf-viewer',description:'Portable Document Format',length:1};
+        var p2={name:'Chrome PDF Viewer',filename:'mhjfbmdgcfjbbpaeojofohoefgiehjai',description:'',length:1};
+        var p3={name:'Native Client',filename:'internal-nacl-plugin',description:'',length:1};
+        return Object.setPrototypeOf([p1,p2,p3],pp);
+    }
+});
+var mp=Object.getPrototypeOf(navigator.mimeTypes);
+Object.defineProperty(navigator, 'mimeTypes', {
+    get: () => Object.setPrototypeOf([{type:'application/pdf',suffixes:'pdf',description:''}],mp)
+});
+Object.defineProperty(navigator, 'languages', {get: () => ['zh-CN','zh','en']});
+Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 4});
+window.chrome = {runtime:{}, loadTimes:()=>{}, csi:()=>{}};
 )";
 
                     auto* raw_ctx = ctx.release();
