@@ -104,7 +104,7 @@ void UvScheduler::after(uint64_t delay_ms,
 }
 
 void UvScheduler::step() {
-    uv_run(uv_default_loop(), UV_RUN_NOWAIT);
+    uv_run(uv_default_loop(), UV_RUN_ONCE);
 }
 
 void UvScheduler::run() {

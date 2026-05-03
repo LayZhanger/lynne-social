@@ -6,7 +6,6 @@
 
 #include <cstdio>
 #include <cstdlib>
-#include <unistd.h>
 #include <string>
 #include <thread>
 #include <chrono>
@@ -37,16 +36,23 @@ static bool test_chrome_available() {
 
 static void pump(BrowserManager* b, std::atomic<bool>& done, int max_ms = 7500) {
     auto t0 = std::chrono::steady_clock::now();
-    while (!done) { b->step(); usleep(5000); if (std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now() - t0).count() >= max_ms) break; }
+    while (!done) {
+        b->step();
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count() >= max_ms) break;
+    }
     if (!done) printf("  [WARN] pump timeout (%dms)\n", max_ms);
 }
 
 static bool wait_started(BrowserManager* b) {
     std::atomic<bool> ok{false};
     auto t0 = std::chrono::steady_clock::now();
-    while (!ok) { b->step(); usleep(5000); ok = b->health_check(); if (std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now() - t0).count() >= 3000) break; }
+    while (!ok) {
+        b->step();
+        ok = b->health_check();
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count() >= 3000) break;
+    }
     return ok;
 }
 

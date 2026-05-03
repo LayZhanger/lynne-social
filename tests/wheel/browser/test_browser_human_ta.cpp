@@ -6,7 +6,6 @@
 
 #include <cstdio>
 #include <cstdlib>
-#include <unistd.h>
 #include <filesystem>
 #include <string>
 #include <thread>
@@ -43,7 +42,6 @@ static void pump(BrowserManager* browser, std::atomic<bool>& done,
     auto t0 = std::chrono::steady_clock::now();
     while (!done) {
         browser->step();
-        usleep(5000);
         if (std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - t0).count() >= max_ms) break;
     }
