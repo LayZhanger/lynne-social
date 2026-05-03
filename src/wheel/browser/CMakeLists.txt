@@ -3,6 +3,7 @@ set(DIST_DIR ${CMAKE_SOURCE_DIR}/dist)
 add_library(lynne_browser STATIC
     browser_models.cpp
     browser_factory.cpp
+    browser_helpers.cpp
     imp/cdp_browser_manager.cpp
 )
 

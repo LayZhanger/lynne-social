@@ -11,3 +11,9 @@ target_link_libraries(test_browser_baidu_ta lynne_browser lynne_logger ${DIST_DI
 
 add_lynne_ta(test_browser_human_ta test_browser_human_ta.cpp)
 target_link_libraries(test_browser_human_ta lynne_browser lynne_logger ${DIST_DIR}/lib/libixwebsocket.a)
+
+add_lynne_ta(test_browser_human_ta_edge test_browser_human_ta_edge.cpp)
+target_link_libraries(test_browser_human_ta_edge lynne_browser lynne_logger ${DIST_DIR}/lib/libixwebsocket.a)
+
+add_lynne_ta(test_browser_xiaohongshu_ta test_browser_xiaohongshu_ta.cpp)
+target_link_libraries(test_browser_xiaohongshu_ta lynne_browser lynne_logger ${DIST_DIR}/lib/libixwebsocket.a)

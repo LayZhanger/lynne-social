@@ -26,6 +26,21 @@ namespace lynne {
 namespace wheel {
 
 // ============================================================
+// 工具
+// ============================================================
+
+static std::string js_selector(const std::string& s) {
+    std::string r;
+    r.reserve(s.size() + 4);
+    for (char c : s) {
+        if (c == '\\') r += "\\\\";
+        else if (c == '\'') r += "\\'";
+        else r += c;
+    }
+    return r;
+}
+
+// ============================================================
 // 文件读写
 // ============================================================
 
@@ -227,8 +242,9 @@ void CdpBrowserContext::click(const std::string& css_selector,
     std::function<void()> on_done,
     std::function<void(const std::string&)> on_error) {
     if (closed_) { on_error("context closed"); return; }
+    std::string sel = js_selector(css_selector);
     std::string js = R"((()=>{
-        const e=document.querySelector(')" + css_selector + R"(');
+        const e=document.querySelector(')" + sel + R"(');
         if(!e)return false;
         e.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true,view:window}));
         e.dispatchEvent(new MouseEvent('mouseup',{bubbles:true,cancelable:true,view:window}));
@@ -253,7 +269,7 @@ void CdpBrowserContext::type(const std::string& css_selector, const std::string&
     std::function<void()> on_done,
     std::function<void(const std::string&)> on_error) {
     if (closed_) { on_error("context closed"); return; }
-    // 用 DOM API 聚焦 + 设值，比 CDP Input.insertText 更可靠
+    std::string sel = js_selector(css_selector);
     std::string escaped;
     escaped.reserve(text.size());
     for (char c : text) {
@@ -264,7 +280,7 @@ void CdpBrowserContext::type(const std::string& css_selector, const std::string&
         else escaped += c;
     }
     std::string js = "(()=>{const e=document.querySelector('"
-        + css_selector + "');if(!e)return false;"
+        + sel + "');if(!e)return false;"
         "e.focus();e.value='" + escaped + "';"
         "e.dispatchEvent(new Event('input',{bubbles:true}));"
         "e.dispatchEvent(new Event('change',{bubbles:true}));"
@@ -320,8 +336,9 @@ void CdpBrowserContext::hover(const std::string& css_selector,
     std::function<void()> on_done,
     std::function<void(const std::string&)> on_error) {
     if (closed_) { on_error("context closed"); return; }
+    std::string sel = js_selector(css_selector);
     std::string js = R"((()=>{
-        const e=document.querySelector(')" + css_selector + R"(');
+        const e=document.querySelector(')" + sel + R"(');
         if(!e)return false;
         e.dispatchEvent(new MouseEvent('mouseover',{bubbles:true,cancelable:true,view:window}));
         e.dispatchEvent(new MouseEvent('mouseenter',{bubbles:false,cancelable:true,view:window}));
@@ -343,7 +360,8 @@ void CdpBrowserContext::exists(const std::string& css_selector,
     std::function<void(bool)> on_result,
     std::function<void(const std::string&)> on_error) {
     if (closed_) { on_error("context closed"); return; }
-    std::string js = "!!document.querySelector('" + css_selector + "')";
+    std::string sel = js_selector(css_selector);
+    std::string js = "!!document.querySelector('" + sel + "')";
     evaluate(js,
         [on_result](nlohmann::json res) {
             bool found = false;
@@ -373,7 +391,8 @@ void CdpBrowserContext::wait_for_selector(const std::string& css_selector,
             on_timeout("wait_for_selector timeout (" + css_selector + ")");
             return;
         }
-        evaluate("!!document.querySelector('" + css_selector + "')",
+        std::string sel = js_selector(css_selector);
+        evaluate("!!document.querySelector('" + sel + "')",
             [done, on_found, check](nlohmann::json res) {
                 if (*done) return;
                 bool found = false;
